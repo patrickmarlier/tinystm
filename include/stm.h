@@ -75,6 +75,11 @@
 # include <stdio.h>
 # include <stdlib.h>
 
+/* Version string */
+# define STM_VERSION                    "1.0.0"
+/* Version number (times 100) */
+# define STM_VERSION_NB                 100
+
 # ifdef __cplusplus
 extern "C" {
 # endif
@@ -129,10 +134,85 @@ typedef struct stm_tx_attr {
    * Indicates whether the transaction is read-only.  This information
    * is used as a hint.  If a read-only transaction performs a write, it
    * is aborted and restarted in read-write mode.  In that case, the
-   * value of the read-only flag is changed to false.
+   * value of the read-only flag is changed to false.  If no attributes
+   * are specified when starting a transaction, it is assumed to be
+   * read-write.
    */
-  int ro;
+  unsigned int read_only : 1;
+  /**
+   * Indicates that the transaction should not retry execution using
+   * sigsetjmp() after abort.  If no attributes are specified when
+   * starting a transaction, the default behavior is to retry.
+   */
+  unsigned int no_retry : 1;
 } stm_tx_attr_t;
+
+/**
+ * Reason for aborting (returned by sigsetjmp() upon transaction
+ * restart).
+ */
+enum {
+  /**
+   * Abort due to explicit call from the programmer (no retry).
+   */
+  STM_ABORT_EXPLICIT = (1 << 4),
+  /**
+   * Implicit abort (high order bits indicate more detailed reason).
+   */
+  STM_ABORT_IMPLICIT = (1 << 5),
+  /**
+   * Abort upon reading a memory location being read by another
+   * transaction.
+   */
+  STM_ABORT_RR_CONFLICT = (1 << 5) | (0x01 << 8),
+  /**
+   * Abort upon writing a memory location being read by another
+   * transaction.
+   */
+  STM_ABORT_RW_CONFLICT = (1 << 5) | (0x02 << 8),
+  /**
+   * Abort upon reading a memory location being written by another
+   * transaction.
+   */
+  STM_ABORT_WR_CONFLICT = (1 << 5) | (0x03 << 8),
+  /**
+   * Abort upon writing a memory location being written by another
+   * transaction.
+   */
+  STM_ABORT_WW_CONFLICT = (1 << 5) | (0x04 << 8),
+  /**
+   * Abort upon read due to failed validation.
+   */
+  STM_ABORT_VAL_READ = (1 << 5) | (0x05 << 8),
+  /**
+   * Abort upon write due to failed validation.
+   */
+  STM_ABORT_VAL_WRITE = (1 << 5) | (0x06 << 8),
+  /**
+   * Abort upon commit due to failed validation.
+   */
+  STM_ABORT_VALIDATE = (1 << 5) | (0x07 << 8),
+  /**
+   * Abort upon write from a transaction declared as read-only.
+   */
+  STM_ABORT_RO_WRITE = (1 << 5) | (0x08 << 8),
+  /**
+   * Abort upon deferring to an irrevocable transaction.
+   */
+  STM_ABORT_IRREVOCABLE = (1 << 5) | (0x09 << 8),
+  /**
+   * Abort due to being killed by another transaction.
+   */
+  STM_ABORT_KILLED = (1 << 5) | (0x0A << 8),
+  /**
+   * Abort due to receiving a signal.
+   */
+  STM_ABORT_SIGNAL = (1 << 5) | (0x0B << 8),
+  /**
+   * Abort due to other reasons (internal to the protocol).
+   */
+  STM_ABORT_OTHER = (1 << 5) | (0x0F << 8)
+};
 
 /* ################################################################### *
  * FUNCTIONS
@@ -167,34 +247,37 @@ void stm_exit_thread(TXPARAM);
 /**
  * Start a transaction.
  *
- * @param env
- *   Specifies the environment (stack context) to be used to jump back
- *   upon abort.  If null, the transaction will continue even after
- *   abort and the application should explicitely check its status.  If
- *   the transaction is nested, this parameter is ignored as an abort
- *   will restart the top-level transaction (flat nesting).
  * @param attr
  *   Specifies optional attributes associated to the transaction.  If
  *   null, the transaction uses default attributes.
+ * @return
+ *   Environment (stack context) to be used to jump back upon abort.  It
+ *   is the responsibility of the application to call sigsetjmp()
+ *   immediately after starting the transaction.  If the transaction is
+ *   nested, the function returns NULL and one should not call
+ *   sigsetjmp() as an abort will restart the top-level transaction
+ *   (flat nesting).
  */
-void stm_start(TXPARAMS sigjmp_buf *env, stm_tx_attr_t *attr);
+sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr);
 
 /**
  * Try to commit a transaction.  If successful, the function returns 1.
- * Otherwise, execution continues at the point specified by the
- * environment passed as parameter to stm_start() (for the outermost
- * transaction upon nesting).  If the environment was null, the function
- * returns 0 if commit is unsuccessful.
+ * Otherwise, execution continues at the point where sigsetjmp() has
+ * been called after starting the outermost transaction (unless the
+ * attributes indicate that the transaction should not retry).
+ *
+ * @return
+ *   1 upon success, 0 otherwise.
  */
 int stm_commit(TXPARAM);
 
 /**
  * Explicitly abort a transaction.  Execution continues at the point
- * specified by the environment passed as parameter to stm_start() (for
- * the outermost transaction upon nesting), unless the environment was
- * null.
+ * where sigsetjmp() has been called after starting the outermost
+ * transaction (unless the attributes indicate that the transaction
+ * should not retry).
  */
-void stm_abort(TXPARAM) /* __attribute__ ((noreturn)) */;
+void stm_abort(TXPARAMS int abort_reason);
 
 /**
  * Transactional load.  Read the specified memory location in the
@@ -255,6 +338,16 @@ int stm_active(TXPARAM);
  *   True (non-zero) if the transaction has aborted, false (zero) otherwise.
  */
 int stm_aborted(TXPARAM);
+
+/**
+ * Check if the current transaction is still active and in irrevocable
+ * state.
+ *
+ * @return 
+ *   True (non-zero) if the transaction is active and irrevocable, false
+ *   (zero) otherwise.
+ */
+int stm_irrevocable(TXPARAM);
 
 /**
  * Get the environment used by the current thread to jump back upon
@@ -354,7 +447,7 @@ void *stm_get_specific(TXPARAMS int key);
 void stm_set_specific(TXPARAMS int key, void *data);
 
 /**
- * Register application-specific callbacks that are triggered when
+ * Register application-specific callbacks that are triggered each time
  * particular events occur.
  *
  * @param on_thread_init
@@ -469,6 +562,21 @@ void stm_set_extension(TXPARAMS int enable, stm_word_t *timestamp);
  *   Value of the global clock.
  */
 stm_word_t stm_get_clock();
+
+/**
+ * Enter irrevokable mode for the current transaction.  If successful,
+ * the function returns 1.  Otherwise, it aborts and execution continues
+ * at the point where sigsetjmp() has been called after starting the
+ * outermost transaction (unless the attributes indicate that the
+ * transaction should not retry).
+ *
+ * @param enable
+ *   True (non-zero) for serial-irrevocable mode (no transaction can
+ *   execute concurrently), false for parallel-irrevocable mode.
+ * @return
+ *   1 upon success, 0 otherwise.
+ */
+int stm_set_irrevocable(TXPARAMS int serial);
 
 #ifdef __cplusplus
 }

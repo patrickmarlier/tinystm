@@ -2,11 +2,14 @@ ROOT = ../..
 
 include $(ROOT)/Makefile.common
 
-BINS = intset-ll intset-rb intset-sl
+BINS = intset-hs intset-ll intset-rb intset-sl
 
 .PHONY:	all clean
 
 all:	$(BINS)
+
+intset-hs.o:	intset.c
+	$(CC) $(CFLAGS) $(DEFINES) -DUSE_HASHSET -c -o $@ $<
 
 intset-ll.o:	intset.c
 	$(CC) $(CFLAGS) $(DEFINES) -DUSE_LINKEDLIST -c -o $@ $<

@@ -2,7 +2,7 @@ ROOT = ../..
 
 include $(ROOT)/Makefile.common
 
-BINS = types
+BINS = types irrevocability
 
 .PHONY:	all clean
 

@@ -39,9 +39,9 @@ include Makefile.common
 # Refer to [PPoPP-08] for more details.
 ########################################################################
 
-# DEFINES += -DDESIGN=WRITE_BACK_ETL
+DEFINES += -DDESIGN=WRITE_BACK_ETL
 # DEFINES += -DDESIGN=WRITE_BACK_CTL
-DEFINES += -DDESIGN=WRITE_THROUGH
+# DEFINES += -DDESIGN=WRITE_THROUGH
 
 ########################################################################
 # Several contention management strategies are available:
@@ -57,57 +57,35 @@ DEFINES += -DDESIGN=WRITE_THROUGH
 #   transaction can succeed with no interruption upon retry, which
 #   improves execution time on the processor.
 #
-# CM_DELAY: like CM_SUICIDE but wait for a random delay before
+# CM_BACKOFF: like CM_SUICIDE but wait for a random delay before
 #   restarting the transaction.  The delay duration is chosen uniformly
 #   at random from a range whose size increases exponentially with every
 #   restart.
 #
-# CM_PRIORITY: cooperative priority-based contention manager that avoids
-#   livelocks.  It only works with the ETL-based design (WRITE_BACK_ETL
-#   or WRITE_THROUGH).  The principle is to give preference to
-#   transactions that have already aborted many times.  Therefore, a
-#   priority is associated to each transaction and it increases with the
-#   number of retries.
-# 
-#   A transaction that tries to acquire a lock can "reserve" it if it is
-#   currently owned by another transaction with lower priority.  If the
-#   latter is blocked waiting for another lock, it will detect that the
-#   former is waiting for the lock and will abort.  As with CM_DELAY,
-#   before retrying after failing to acquire some lock, we wait until
-#   the lock we were waiting for is released.
-#
-#   If a transaction fails because of a read-write conflict (detected
-#   upon validation at commit time), we do not increase the priority.
-#   It such a failure occurs sufficiently enough (e.g., three times in a
-#   row, can be parametrized), we switch to visible reads.
-#
-#   When using visible reads, each read is implemented as a write and we
-#   do not allow multiple readers.  The reasoning is that (1) visible
-#   reads are expected to be used rarely, (2) supporting multiple
-#   readers is complex and has non-negligible overhead, especially if
-#   fairness must be guaranteed, e.g., to avoid writer starvation, and
-#   (3) having a single reader makes lock upgrade trivial.
-#
-#   To implement cooperative contention management, we associate a
-#   priority to each transaction.  The priority is used to avoid
-#   deadlocks and to decide which transaction can proceed or must abort
-#   upon conflict.  Priorities can vary between 0 and MAX_PRIORITY.  By
-#   default we use 3 bits, i.e., MAX_PRIORITY=7, and we use the number
-#   of retries of a transaction to specify its priority.  The priority
-#   of a transaction is encoded in the locks (when the lock bit is set).
-#   If the number of concurrent transactions is higher than
-#   MAX_PRIORITY+1, the properties of the CM (bound on the number of
-#   retries) might not hold.
-#
-#   The priority contention manager can be activated only after a
-#   configurable number of retries.  Until then, CM_SUICIDE is used.
+# CM_MODULAR: supports several built-in contention managers.  At the
+#   time, the following ones are supported:
+#   - SUICIDE: kill current transaction (i.e., the transaction that
+#     discovers the conflict).
+#   - AGGRESSIVE: kill other transaction.
+#   - DELAY: same as SUICIDE but wait for conflict resolution before
+#     restart.
+#   - TIMESTAMP: kill youngest transaction.
+#   One can also register custom contention managers.
 ########################################################################
 
 # Pick one contention manager (CM)
-DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
-# DEFINES += -DCM=CM_PRIORITY
+DEFINES += -DCM=CM_MODULAR
+
+########################################################################
+# Enable irrevocable mode (required for using the library with a
+# compiler).
+########################################################################
+
+DEFINES += -DIRREVOCABLE_ENABLED
+# DEFINES += -UIRREVOCABLE_ENABLED
 
 ########################################################################
 # Maintain detailed internal statistics.  Statistics are stored in
@@ -117,16 +95,6 @@ DEFINES += -DCM=CM_SUICIDE
 
 DEFINES += -DINTERNAL_STATS
 # DEFINES += -UINTERNAL_STATS
-
-########################################################################
-# Roll over clock when it reaches its maximum value.  Clock rollover can
-# be safely disabled on 64 bits to save a few cycles, but it is
-# necessary on 32 bits if the application executes more than 2^28
-# (write-through) or 2^31 (write-back) transactions.
-########################################################################
-
-DEFINES += -DROLLOVER_CLOCK
-# DEFINES += -UROLLOVER_CLOCK
 
 ########################################################################
 # Ensure that the global clock does not share the same cache line than
@@ -148,7 +116,7 @@ DEFINES += -UNO_DUPLICATES_IN_RW_SETS
 
 ########################################################################
 # Yield the processor when waiting for a contended lock to be released.
-# This only applies to the CM_WAIT and CM_PRIORITY contention managers.
+# This only applies to the DELAY and CM_MODULAR contention managers.
 ########################################################################
 
 # DEFINES += -DWAIT_YIELD
@@ -191,7 +159,7 @@ DEFINES += -UCONFLICT_TRACKING
 # the lock.  There is a small overhead with non-contended workloads but
 # it may significantly reduce the abort rate, especially with
 # transactions that read much data.  This feature only works with the
-# WRITE_BACK_ETL design and requires EPOCH_GC.
+# WRITE_BACK_ETL design and MODULAR contention manager.
 ########################################################################
 
 # DEFINES += -DREAD_LOCKED_DATA
@@ -243,13 +211,7 @@ DEFINES += -UDEBUG2
 # VR_THRESHOLD_DEFAULT (default=3): number of aborts due to failed
 #   validation before switching to visible reads.  A value of 0
 #   indicates no limit.  This parameter is only used with the
-#   CM_PRIORITY contention manager.  It can also be set using an
-#   environment variable of the same name.
-#
-# CM_THRESHOLD_DEFAULT (default=0): number of executions of the
-#   transaction with a CM_SUICIDE contention management strategy before
-#   switching to CM_PRIORITY.  This parameter is only used with the
-#   CM_PRIORITY contention manager.  It can also be set using an
+#   CM_MODULAR contention manager.  It can also be set using an
 #   environment variable of the same name.
 ########################################################################
 
@@ -259,9 +221,6 @@ DEFINES += -UDEBUG2
 # DEFINES += -DMIN_BACKOFF=0x04UL
 # DEFINES += -DMAX_BACKOFF=0x80000000UL
 # DEFINES += -DVR_THRESHOLD_DEFAULT=3
-# DEFINES += -DCM_THRESHOLD_DEFAULT=0
-
-#DEFINES += -DEXPLICIT_TX_PARAMETER
 
 ########################################################################
 # Do not modify anything below this point!
@@ -276,13 +235,13 @@ D += -DWRITE_BACK_ETL=0 -DWRITE_BACK_CTL=1 -DWRITE_THROUGH=2
 D := $(D:CM_SUICIDE=0)
 D := $(D:CM_DELAY=1)
 D := $(D:CM_BACKOFF=2)
-D := $(D:CM_PRIORITY=3)
-D += -DCM_SUICIDE=0 -DCM_DELAY=1 -DCM_BACKOFF=2 -DCM_PRIORITY=3
+D := $(D:CM_MODULAR=3)
+D += -DCM_SUICIDE=0 -DCM_DELAY=1 -DCM_BACKOFF=2 -DCM_MODULAR=3
 
 ifneq (,$(findstring -DEPOCH_GC,$(DEFINES)))
- GC := $(SRCDIR)/gc.o
+  GC := $(SRCDIR)/gc.o
 else
- GC :=
+  GC :=
 endif
 
 CFLAGS += -I$(SRCDIR)

@@ -1,6 +1,3 @@
-# Path to LIBATOMIC_OPS
-LIBAO_HOME ?= /usr/local
-
 # Path to root directory
 ROOT ?= .
 
@@ -10,25 +7,36 @@ DOXYGEN ?= doxygen
 UNIFDEF ?= unifdef
 
 # Debug/optimization flags
-# CFLAGS += -g
-CFLAGS += -O3 -DNDEBUG
+# Default config is optimization
+ifeq ($(CFG),debug)
+  CFLAGS += -g
+else
+  CFLAGS += -O3 -DNDEBUG
+endif
 
 TM = stm
-
-CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -D_REENTRANT
-CFLAGS += -I$(LIBAO_HOME)/include -I$(ROOT)/include
-
-LDFLAGS += -L$(LIBAO_HOME)/lib -L$(ROOT)/lib -latomic_ops -lstm -lpthread
 
 SRCDIR = $(ROOT)/src
 INCDIR = $(ROOT)/include
 LIBDIR = $(ROOT)/lib
 
+# Path to LIBATOMIC_OPS
+ifdef LIBAO_HOME
+  LIBAO_INC = $(LIBAO_HOME)/include
+else
+  LIBAO_INC = $(SRCDIR)/atomic_ops
+endif
+
+CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -D_REENTRANT
+CFLAGS += -I$(LIBAO_INC) -I$(INCDIR) -I$(SRCDIR)
+
+LDFLAGS += -L$(LIBDIR) -l$(TM) -lpthread
+
 TMLIB = $(LIBDIR)/lib$(TM).a
 
 # GCC thread-local storage (enable if supported on target architecture)
 ifdef NOTLS
- DEFINES += -UTLS
+  DEFINES += -UTLS
 else
- DEFINES += -DTLS
+  DEFINES += -DTLS
 endif

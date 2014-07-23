@@ -39,9 +39,9 @@
 /* Note: stdio is thread-safe */
 #endif
 
-#if !(defined(USE_LINKEDLIST) || defined(USE_RBTREE) || defined(USE_SKIPLIST))
-# error "Must define USE_LINKEDLIST or USE_RBTREE or USE_SKIPLIST"
-#endif /* !(defined(USE_LINKEDLIST) || defined(USE_RBTREE) || defined(USE_SKIPLIST)) */
+#if !(defined(USE_LINKEDLIST) || defined(USE_RBTREE) || defined(USE_SKIPLIST) || defined(USE_HASHSET))
+# error "Must define USE_LINKEDLIST or USE_RBTREE or USE_SKIPLIST or USE_HASHSET"
+#endif /* !(defined(USE_LINKEDLIST) || defined(USE_RBTREE) || defined(USE_SKIPLIST) || defined(USE_HASHSET)) */
 
 /*
  * Useful macros to work with transactions. Note that, to use nested
@@ -50,8 +50,8 @@
  */
 #define RO                              1
 #define RW                              0
-#define START(id, ro)                   { sigjmp_buf *_e = stm_get_env(); stm_tx_attr_t _a = {id, ro}; sigsetjmp(*_e, 0); stm_start(_e, &_a)
-#define START_TS(ts, label)             { sigjmp_buf *_e = stm_get_env(); if (sigsetjmp(*_e, 0)) goto label; stm_start(_e, NULL); stm_set_extension(0, &ts)
+#define START(id, ro)                   { stm_tx_attr_t _a = {id, ro}; sigjmp_buf *_e = stm_start(&_a); if (_e != NULL) sigsetjmp(*_e, 0); 
+#define START_TS(ts, label)             { sigjmp_buf *_e = stm_start(NULL); if (_e != NULL && sigsetjmp(*_e, 0)) goto label; stm_set_extension(0, &ts)
 #define LOAD(addr)                      stm_load((stm_word_t *)addr)
 #define UNIT_LOAD(addr, ts)             stm_unit_load((stm_word_t *)addr, ts)
 #define STORE(addr, value)              stm_store((stm_word_t *)addr, (stm_word_t)value)
@@ -63,7 +63,7 @@
 #define DEFAULT_DURATION                10000
 #define DEFAULT_INITIAL                 256
 #define DEFAULT_NB_THREADS              1
-#define DEFAULT_RANGE                   0xFFFF
+#define DEFAULT_RANGE                   (DEFAULT_INITIAL * 2)
 #define DEFAULT_SEED                    0
 #define DEFAULT_UPDATE                  20
 
@@ -75,14 +75,28 @@
  * ################################################################### */
 
 static volatile AO_t stop;
-static unsigned int global_seed;
+
+static inline void rand_init(unsigned short *seed)
+{
+  seed[0] = (unsigned short)rand();
+  seed[1] = (unsigned short)rand();
+  seed[2] = (unsigned short)rand();
+}
+
+static inline int rand_range(int n, unsigned short *seed)
+{
+  /* Return a random number in range [0;n) */
+  int v = (int)(erand48(seed) * n);
+  assert (v >= 0 && v < n);
+  return v;
+}
 
 /* ################################################################### *
  * THREAD-LOCAL
  * ################################################################### */
 
 #ifdef TLS
-static __thread unsigned int *rng_seed;
+static __thread unsigned short *rng_seed;
 #else /* ! TLS */
 static pthread_key_t rng_seed_key;
 #endif /* ! TLS */
@@ -480,6 +494,11 @@ int set_contains(intset_t *set, val_t val, int transactional)
 {
   int result;
 
+# ifdef DEBUG
+  printf("++> set_contains(%d)\n", val);
+  IO_FLUSH;
+# endif
+
   if (!transactional) {
     result = rbtree_contains(set, (void *)val);
   } else {
@@ -495,6 +514,11 @@ int set_add(intset_t *set, val_t val, int transactional)
 {
   int result;
 
+# ifdef DEBUG
+  printf("++> set_add(%d)\n", val);
+  IO_FLUSH;
+# endif
+
   if (!transactional) {
     result = rbtree_insert(set, (void *)val, (void *)val);
   } else {
@@ -509,6 +533,11 @@ int set_add(intset_t *set, val_t val, int transactional)
 int set_remove(intset_t *set, val_t val, int transactional)
 {
   int result;
+
+# ifdef DEBUG
+  printf("++> set_remove(%d)\n", val);
+  IO_FLUSH;
+# endif
 
   if (!transactional) {
     result = rbtree_delete(set, (void *)val);
@@ -541,7 +570,7 @@ typedef intptr_t level_t;
 typedef struct node {
   val_t val;
   level_t level;
-  struct node **forward;
+  struct node *forward[1];
 } node_t;
 
 typedef struct intset {
@@ -554,11 +583,13 @@ typedef struct intset {
 
 inline int rand_100()
 {
+  unsigned short *seed;
 # ifdef TLS
-  return rand_r(rng_seed) % 100;
+  seed = rng_seed;
 # else /* ! TLS */
-  return rand_r((unsigned int *)pthread_getspecific(rng_seed_key)) % 100;
+  seed = (unsigned short *)pthread_getspecific(rng_seed_key);
 # endif /* ! TLS */
+  return rand_range(100, seed);
 }
 
 int random_level(intset_t *set)
@@ -574,20 +605,11 @@ node_t *new_node(val_t val, level_t level, int transactional)
   node_t *node;
 
   if (!transactional) {
-    node = (node_t *)malloc(sizeof(node_t));
+    node = (node_t *)malloc(sizeof(node_t) + level * sizeof(node_t *));
   } else {
-    node = (node_t *)MALLOC(sizeof(node_t));
+    node = (node_t *)MALLOC(sizeof(node_t) + level * sizeof(node_t *));
   }
   if (node == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-  if (!transactional) {
-    node->forward = (node_t **)malloc((level + 1) * sizeof(node_t *));
-  } else {
-    node->forward = (node_t **)MALLOC((level + 1) * sizeof(node_t *));
-  }
-  if (node->forward == NULL) {
     perror("malloc");
     exit(1);
   }
@@ -631,7 +653,6 @@ void set_delete(intset_t *set)
   node = set->head;
   while (node != NULL) {
     next = node->forward[0];
-    free(node->forward);
     free(node);
     node = next;
   }
@@ -659,6 +680,11 @@ int set_contains(intset_t *set, val_t val, int transactional)
   node_t *node, *next;
   val_t v;
 
+# ifdef DEBUG
+  printf("++> set_contains(%d)\n", val);
+  IO_FLUSH;
+# endif
+
   if (!transactional) {
     node = set->head;
     for (i = set->level; i >= 0; i--) {
@@ -684,7 +710,6 @@ int set_contains(intset_t *set, val_t val, int transactional)
         next = (node_t *)LOAD(&node->forward[i]);
       }
     }
-    node = (node_t *)LOAD(&node->forward[0]);
     result = (v == val);
     COMMIT;
   }
@@ -699,6 +724,11 @@ int set_add(intset_t *set, val_t val, int transactional)
   node_t *node, *next;
   level_t level, l;
   val_t v;
+
+# ifdef DEBUG
+  printf("++> set_add(%d)\n", val);
+  IO_FLUSH;
+# endif
 
   if (!transactional) {
     node = set->head;
@@ -744,7 +774,6 @@ int set_add(intset_t *set, val_t val, int transactional)
       }
       update[i] = node;
     }
-    node = (node_t *)LOAD(&node->forward[0]);
 
     if (v == val) {
       result = 0;
@@ -775,6 +804,11 @@ int set_remove(intset_t *set, val_t val, int transactional)
   node_t *node, *next;
   level_t level;
   val_t v;
+
+# ifdef DEBUG
+  printf("++> set_remove(%d)\n", val);
+  IO_FLUSH;
+# endif
 
   if (!transactional) {
     node = set->head;
@@ -832,8 +866,7 @@ int set_remove(intset_t *set, val_t val, int transactional)
       if (i != level)
         STORE(&set->level, i);
       /* Free memory (delayed until commit) */
-      FREE(node->forward, (node->level + 1) * sizeof(node_t *));
-      FREE(node, sizeof(node_t));
+      FREE(node, sizeof(node_t) + node->level * sizeof(node_t *));
       result = 1;
     }
     COMMIT;
@@ -842,7 +875,253 @@ int set_remove(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-#endif /* defined(USE_SKIPLIST) */
+#elif defined(USE_HASHSET)
+
+/* ################################################################### *
+ * HASHSET
+ * ################################################################### */
+
+# define TRANSACTIONAL                  1
+
+# define INIT_SET_PARAMETERS            /* Nothing */
+
+# define NB_BUCKETS                     (1UL << 17)
+
+# define HASH(a)                        (hash((uint32_t)a) & (NB_BUCKETS - 1))
+
+typedef intptr_t val_t;
+
+typedef struct bucket {
+  val_t val;
+  struct bucket *next;
+} bucket_t;
+
+typedef struct intset {
+  bucket_t **buckets;
+} intset_t;
+
+uint32_t hash(uint32_t a)
+{
+  /* Knuth's multiplicative hash function */
+  a *= 2654435761;
+  return a;
+}
+
+bucket_t *new_entry(val_t val, bucket_t *next, int transactional)
+{
+  bucket_t *b;
+
+  if (!transactional) {
+    b = (bucket_t *)malloc(sizeof(bucket_t));
+  } else {
+    b = (bucket_t *)MALLOC(sizeof(bucket_t));
+  }
+  if (b == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+
+  b->val = val;
+  b->next = next;
+
+  return b;
+}
+
+intset_t *set_new()
+{
+  intset_t *set;
+
+  if ((set = (intset_t *)malloc(sizeof(intset_t))) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+  if ((set->buckets = (bucket_t **)calloc(NB_BUCKETS, sizeof(bucket_t *))) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+
+  return set;
+}
+
+void set_delete(intset_t *set)
+{
+  unsigned int i;
+  bucket_t *b, *next;
+
+  for (i = 0; i < NB_BUCKETS; i++) {
+    b = set->buckets[i];
+    while (b != NULL) {
+      next = b->next;
+      free(b);
+      b = next;
+    }
+  }
+  free(set->buckets);
+  free(set);
+}
+
+int set_size(intset_t *set)
+{
+  int size = 0;
+  unsigned int i;
+  bucket_t *b;
+
+  for (i = 0; i < NB_BUCKETS; i++) {
+    b = set->buckets[i];
+    while (b != NULL) {
+      size++;
+      b = b->next;
+    }
+  }
+
+  return size;
+}
+
+int set_contains(intset_t *set, val_t val, int transactional)
+{
+  int result, i;
+  bucket_t *b;
+
+# ifdef DEBUG
+  printf("++> set_contains(%d)\n", val);
+  IO_FLUSH;
+# endif
+
+  if (!transactional) {
+    i = HASH(val);
+    b = set->buckets[i];
+    result = 0;
+    while (b != NULL) {
+      if (b->val == val) {
+        result = 1;
+        break;
+      }
+      b = b->next;
+    }
+  } else {
+    START(0, RO);
+    i = HASH(val);
+    b = (bucket_t *)LOAD(&set->buckets[i]);
+    result = 0;
+    while (b != NULL) {
+      if (LOAD(&b->val) == val) {
+        result = 1;
+        break;
+      }
+      b = (bucket_t *)LOAD(&b->next);
+    }
+    COMMIT;
+  }
+
+  return result;
+}
+
+int set_add(intset_t *set, val_t val, int transactional)
+{
+  int result, i;
+  bucket_t *b, *first;
+
+# ifdef DEBUG
+  printf("++> set_add(%d)\n", val);
+  IO_FLUSH;
+# endif
+
+  if (!transactional) {
+    i = HASH(val);
+    first = b = set->buckets[i];
+    result = 1;
+    while (b != NULL) {
+      if (b->val == val) {
+        result = 0;
+        break;
+      }
+      b = b->next;
+    }
+    if (result) {
+      set->buckets[i] = new_entry(val, first, transactional);
+    }
+  } else {
+    START(0, RW);
+    i = HASH(val);
+    first = b = (bucket_t *)LOAD(&set->buckets[i]);
+    result = 1;
+    while (b != NULL) {
+      if (LOAD(&b->val) == val) {
+        result = 0;
+        break;
+      }
+      b = (bucket_t *)LOAD(&b->next);
+    }
+    if (result) {
+      STORE(&set->buckets[i], new_entry(val, first, transactional));
+    }
+    COMMIT;
+  }
+
+  return result;
+}
+
+int set_remove(intset_t *set, val_t val, int transactional)
+{
+  int result, i;
+  bucket_t *b, *prev;
+
+# ifdef DEBUG
+  printf("++> set_remove(%d)\n", val);
+  IO_FLUSH;
+# endif
+
+  if (!transactional) {
+    i = HASH(val);
+    prev = b = set->buckets[i];
+    result = 0;
+    while (b != NULL) {
+      if (b->val == val) {
+        result = 1;
+        break;
+      }
+      prev = b;
+      b = b->next;
+    }
+    if (result) {
+      if (prev == b) {
+        /* First element of bucket */
+        set->buckets[i] = b->next;
+      } else {
+        prev->next = b->next;
+      }
+      free(b);
+    }
+  } else {
+    START(0, RW);
+    i = HASH(val);
+    prev = b = (bucket_t *)LOAD(&set->buckets[i]);
+    result = 0;
+    while (b != NULL) {
+      if (LOAD(&b->val) == val) {
+        result = 1;
+        break;
+      }
+      prev = b;
+      b = (bucket_t *)LOAD(&b->next);
+    }
+    if (result) {
+      if (prev == b) {
+        /* First element of bucket */
+        STORE(&set->buckets[i], LOAD(&b->next));
+      } else {
+        STORE(&prev->next, LOAD(&b->next));
+      }
+      /* Free memory (delayed until commit) */
+      FREE(b, sizeof(bucket_t));
+    }
+    COMMIT;
+  }
+
+  return result;
+}
+
+#endif /* defined(USE_HASHSET) */
 
 /* ################################################################### *
  * BARRIER
@@ -884,42 +1163,45 @@ void barrier_cross(barrier_t *b)
  * ################################################################### */
 
 typedef struct thread_data {
-  int range;
-  int update;
-#ifdef USE_LINKEDLIST
-  int unit_tx;
-#endif /* LINKEDLIST */
+  intset_t *set;
+  barrier_t *barrier;
   unsigned long nb_add;
   unsigned long nb_remove;
   unsigned long nb_contains;
   unsigned long nb_found;
   unsigned long nb_aborts;
+  unsigned long nb_aborts_1;
+  unsigned long nb_aborts_2;
   unsigned long nb_aborts_locked_read;
   unsigned long nb_aborts_locked_write;
   unsigned long nb_aborts_validate_read;
   unsigned long nb_aborts_validate_write;
   unsigned long nb_aborts_validate_commit;
   unsigned long nb_aborts_invalid_memory;
-  unsigned long nb_aborts_reallocate;
-  unsigned long nb_aborts_rollover;
+  unsigned long nb_aborts_killed;
   unsigned long locked_reads_ok;
   unsigned long locked_reads_failed;
   unsigned long max_retries;
+  unsigned short seed[3];
   int diff;
-  unsigned int seed;
-  intset_t *set;
-  barrier_t *barrier;
+  int range;
+  int update;
+  int alternate;
+#ifdef USE_LINKEDLIST
+  int unit_tx;
+#endif /* LINKEDLIST */
+  char padding[64];
 } thread_data_t;
 
 void *test(void *data)
 {
-  int val, last = 0;
+  int op, val, last = -1;
   thread_data_t *d = (thread_data_t *)data;
 
 #ifdef TLS
-  rng_seed = &d->seed;
+  rng_seed = d->seed;
 #else /* ! TLS */
-  pthread_setspecific(rng_seed_key, &d->seed);
+  pthread_setspecific(rng_seed_key, d->seed);
 #endif /* ! TLS */
 
   /* Create transaction */
@@ -927,42 +1209,59 @@ void *test(void *data)
   /* Wait on barrier */
   barrier_cross(d->barrier);
 
-  last = -1;
   while (stop == 0) {
-    val = rand_r(&d->seed) % 100;
-    if (val < d->update) {
-      if (last < 0) {
-        /* Add random value */
-        val = (rand_r(&d->seed) % d->range) + 1;
-        if (set_add(d->set, val, TRANSACTIONAL)) {
-          d->diff++;
-          last = val;
+    op = rand_range(100, d->seed);
+    if (op < d->update) {
+      if (d->alternate) {
+        /* Alternate insertions and removals */
+        if (last < 0) {
+          /* Add random value */
+          val = rand_range(d->range, d->seed) + 1;
+          if (set_add(d->set, val, TRANSACTIONAL)) {
+            d->diff++;
+            last = val;
+          }
+          d->nb_add++;
+        } else {
+          /* Remove last value */
+          if (set_remove(d->set, last, TRANSACTIONAL))
+            d->diff--;
+          d->nb_remove++;
+          last = -1;
         }
-        d->nb_add++;
       } else {
-        /* Remove last value */
-        if (set_remove(d->set, last, TRANSACTIONAL))
-          d->diff--;
-        d->nb_remove++;
-        last = -1;
+        /* Randomly perform insertions and removals */
+        val = rand_range(d->range, d->seed) + 1;
+        if ((op & 0x01) == 0) {
+          /* Add random value */
+          if (set_add(d->set, val, TRANSACTIONAL))
+            d->diff++;
+          d->nb_add++;
+        } else {
+          /* Remove random value */
+          if (set_remove(d->set, val, TRANSACTIONAL))
+            d->diff--;
+          d->nb_remove++;
+        }
       }
     } else {
       /* Look for random value */
-      val = (rand_r(&d->seed) % d->range) + 1;
+      val = rand_range(d->range, d->seed) + 1;
       if (set_contains(d->set, val, TRANSACTIONAL))
         d->nb_found++;
       d->nb_contains++;
     }
   }
   stm_get_stats("nb_aborts", &d->nb_aborts);
+  stm_get_stats("nb_aborts_1", &d->nb_aborts_1);
+  stm_get_stats("nb_aborts_2", &d->nb_aborts_2);
   stm_get_stats("nb_aborts_locked_read", &d->nb_aborts_locked_read);
   stm_get_stats("nb_aborts_locked_write", &d->nb_aborts_locked_write);
   stm_get_stats("nb_aborts_validate_read", &d->nb_aborts_validate_read);
   stm_get_stats("nb_aborts_validate_write", &d->nb_aborts_validate_write);
   stm_get_stats("nb_aborts_validate_commit", &d->nb_aborts_validate_commit);
   stm_get_stats("nb_aborts_invalid_memory", &d->nb_aborts_invalid_memory);
-  stm_get_stats("nb_aborts_reallocate", &d->nb_aborts_reallocate);
-  stm_get_stats("nb_aborts_rollover", &d->nb_aborts_rollover);
+  stm_get_stats("nb_aborts_killed", &d->nb_aborts_killed);
   stm_get_stats("locked_reads_ok", &d->locked_reads_ok);
   stm_get_stats("locked_reads_failed", &d->locked_reads_failed);
   stm_get_stats("max_retries", &d->max_retries);
@@ -985,22 +1284,27 @@ int main(int argc, char **argv)
   struct option long_options[] = {
     // These options don't set a flag
     {"help",                      no_argument,       NULL, 'h'},
+    {"do-not-alternate",          no_argument,       NULL, 'a'},
+    {"contention-manager",        required_argument, NULL, 'c'},
     {"duration",                  required_argument, NULL, 'd'},
     {"initial-size",              required_argument, NULL, 'i'},
     {"num-threads",               required_argument, NULL, 'n'},
     {"range",                     required_argument, NULL, 'r'},
     {"seed",                      required_argument, NULL, 's'},
     {"update-rate",               required_argument, NULL, 'u'},
+#ifdef USE_LINKEDLIST
     {"unit-tx",                   no_argument,       NULL, 'x'},
+#endif /* LINKEDLIST */
     {NULL, 0, NULL, 0}
   };
 
   intset_t *set;
   int i, c, val, size;
   char *s;
-  unsigned long reads, updates, aborts, aborts_locked_read, aborts_locked_write,
+  unsigned long reads, updates, aborts, aborts_1, aborts_2,
+    aborts_locked_read, aborts_locked_write,
     aborts_validate_read, aborts_validate_write, aborts_validate_commit,
-    aborts_invalid_memory, aborts_reallocate, aborts_rollover,
+    aborts_invalid_memory, aborts_killed,
     locked_reads_ok, locked_reads_failed, max_retries;
   thread_data_t *data;
   pthread_t *threads;
@@ -1014,14 +1318,17 @@ int main(int argc, char **argv)
   int range = DEFAULT_RANGE;
   int seed = DEFAULT_SEED;
   int update = DEFAULT_UPDATE;
+  char *cm = NULL;
+  int alternate = 1;
 #ifdef USE_LINKEDLIST
   int unit_tx = 0;
 #endif /* LINKEDLIST */
+  unsigned short main_seed[3];
   sigset_t block_set;
 
   while(1) {
     i = 0;
-    c = getopt_long(argc, argv, "hd:i:n:r:s:u:"
+    c = getopt_long(argc, argv, "hac:d:i:n:r:s:u:"
 #ifdef USE_LINKEDLIST
                     "x"
 #endif /* LINKEDLIST */
@@ -1045,7 +1352,9 @@ int main(int argc, char **argv)
               "(red-black tree)\n"
 #elif defined(USE_SKIPLIST)
               "(skip list)\n"
-#endif /* defined(USE_SKIPLIST) */
+#elif defined(USE_HASHSET)
+              "(hash set)\n"
+#endif /* defined(USE_HASHSET) */
               "\n"
               "Usage:\n"
               "  intset [options...]\n"
@@ -1053,6 +1362,10 @@ int main(int argc, char **argv)
               "Options:\n"
               "  -h, --help\n"
               "        Print this message\n"
+              "  -a, --do-not-alternate\n"
+              "        Do not alternate insertions and removals\n"
+              "  -c, --contention-manager <string>\n"
+              "        Contention manager for resolving conflicts (default=suicide)\n"
               "  -d, --duration <int>\n"
               "        Test duration in milliseconds (0=infinite, default=" XSTR(DEFAULT_DURATION) ")\n"
               "  -i, --initial-size <int>\n"
@@ -1071,6 +1384,12 @@ int main(int argc, char **argv)
 #endif /* LINKEDLIST */
          );
        exit(0);
+     case 'a':
+       alternate = 0;
+       break;
+     case 'c':
+       cm = optarg;
+       break;
      case 'd':
        duration = atoi(optarg);
        break;
@@ -1114,13 +1433,17 @@ int main(int argc, char **argv)
   printf("Set type     : red-black tree\n");
 #elif defined(USE_SKIPLIST)
   printf("Set type     : skip list\n");
-#endif /* defined(USE_SKIPLIST) */
+#elif defined(USE_HASHSET)
+  printf("Set type     : hash set\n");
+#endif /* defined(USE_HASHSET) */
+  printf("CM           : %s\n", (cm == NULL ? "DEFAULT" : cm));
   printf("Duration     : %d\n", duration);
   printf("Initial size : %d\n", initial);
   printf("Nb threads   : %d\n", nb_threads);
   printf("Value range  : %d\n", range);
   printf("Seed         : %d\n", seed);
   printf("Update rate  : %d\n", update);
+  printf("Alternate    : %d\n", alternate);
 #ifdef USE_LINKEDLIST
   printf("Unit tx      : %d\n", unit_tx);
 #endif /* LINKEDLIST */
@@ -1143,7 +1466,7 @@ int main(int argc, char **argv)
   }
 
   if (seed == 0)
-    srand((int)time(0));
+    srand((int)time(NULL));
   else
     srand(seed);
 
@@ -1151,30 +1474,39 @@ int main(int argc, char **argv)
 
   stop = 0;
 
-  global_seed = rand();
+  /* Thread-local seed for main thread */
+  rand_init(main_seed);
 #ifdef TLS
-  rng_seed = &global_seed;
+  rng_seed = main_seed;
 #else /* ! TLS */
   if (pthread_key_create(&rng_seed_key, NULL) != 0) {
     fprintf(stderr, "Error creating thread local\n");
     exit(1);
   }
-  pthread_setspecific(rng_seed_key, &global_seed);
+  pthread_setspecific(rng_seed_key, main_seed);
 #endif /* ! TLS */
 
   /* Init STM */
   printf("Initializing STM\n");
   stm_init();
-  mod_mem_init();
+  mod_mem_init(0);
 
   if (stm_get_parameter("compile_flags", &s))
     printf("STM flags    : %s\n", s);
+
+  if (cm != NULL) {
+    if (stm_set_parameter("cm_policy", cm) == 0)
+      printf("WARNING: cannot set contention manager \"%s\"\n", cm);
+  }
+
+  if (alternate == 0 && range != initial * 2)
+    printf("WARNING: range is not twice the initial set size\n");
 
   /* Populate set */
   printf("Adding %d entries to set\n", initial);
   i = 0;
   while (i < initial) {
-    val = (rand() % range) + 1;
+    val = rand_range(range, main_seed) + 1;
     if (set_add(set, val, 0))
       i++;
   }
@@ -1189,6 +1521,7 @@ int main(int argc, char **argv)
     printf("Creating thread %d\n", i);
     data[i].range = range;
     data[i].update = update;
+    data[i].alternate = alternate;
 #ifdef USE_LINKEDLIST
     data[i].unit_tx = unit_tx;
 #endif /* LINKEDLIST */
@@ -1197,19 +1530,20 @@ int main(int argc, char **argv)
     data[i].nb_contains = 0;
     data[i].nb_found = 0;
     data[i].nb_aborts = 0;
+    data[i].nb_aborts_1 = 0;
+    data[i].nb_aborts_2 = 0;
     data[i].nb_aborts_locked_read = 0;
     data[i].nb_aborts_locked_write = 0;
     data[i].nb_aborts_validate_read = 0;
     data[i].nb_aborts_validate_write = 0;
     data[i].nb_aborts_validate_commit = 0;
     data[i].nb_aborts_invalid_memory = 0;
-    data[i].nb_aborts_reallocate = 0;
-    data[i].nb_aborts_rollover = 0;
+    data[i].nb_aborts_killed = 0;
     data[i].locked_reads_ok = 0;
     data[i].locked_reads_failed = 0;
     data[i].max_retries = 0;
     data[i].diff = 0;
-    data[i].seed = rand();
+    rand_init(data[i].seed);
     data[i].set = set;
     data[i].barrier = &barrier;
     if (pthread_create(&threads[i], &attr, test, (void *)(&data[i])) != 0) {
@@ -1252,14 +1586,15 @@ int main(int argc, char **argv)
 
   duration = (end.tv_sec * 1000 + end.tv_usec / 1000) - (start.tv_sec * 1000 + start.tv_usec / 1000);
   aborts = 0;
+  aborts_1 = 0;
+  aborts_2 = 0;
   aborts_locked_read = 0;
   aborts_locked_write = 0;
   aborts_validate_read = 0;
   aborts_validate_write = 0;
   aborts_validate_commit = 0;
   aborts_invalid_memory = 0;
-  aborts_reallocate = 0;
-  aborts_rollover = 0;
+  aborts_killed = 0;
   locked_reads_ok = 0;
   locked_reads_failed = 0;
   reads = 0;
@@ -1278,20 +1613,22 @@ int main(int argc, char **argv)
     printf("    #val-w    : %lu\n", data[i].nb_aborts_validate_write);
     printf("    #val-c    : %lu\n", data[i].nb_aborts_validate_commit);
     printf("    #inv-mem  : %lu\n", data[i].nb_aborts_invalid_memory);
-    printf("    #realloc  : %lu\n", data[i].nb_aborts_reallocate);
-    printf("    #r-over   : %lu\n", data[i].nb_aborts_rollover);
+    printf("    #killed   : %lu\n", data[i].nb_aborts_killed);
+    printf("  #aborts>=1  : %lu\n", data[i].nb_aborts_1);
+    printf("  #aborts>=2  : %lu\n", data[i].nb_aborts_2);
     printf("  #lr-ok      : %lu\n", data[i].locked_reads_ok);
     printf("  #lr-failed  : %lu\n", data[i].locked_reads_failed);
     printf("  Max retries : %lu\n", data[i].max_retries);
     aborts += data[i].nb_aborts;
+    aborts_1 += data[i].nb_aborts_1;
+    aborts_2 += data[i].nb_aborts_2;
     aborts_locked_read += data[i].nb_aborts_locked_read;
     aborts_locked_write += data[i].nb_aborts_locked_write;
     aborts_validate_read += data[i].nb_aborts_validate_read;
     aborts_validate_write += data[i].nb_aborts_validate_write;
     aborts_validate_commit += data[i].nb_aborts_validate_commit;
     aborts_invalid_memory += data[i].nb_aborts_invalid_memory;
-    aborts_reallocate += data[i].nb_aborts_reallocate;
-    aborts_rollover += data[i].nb_aborts_rollover;
+    aborts_killed += data[i].nb_aborts_killed;
     locked_reads_ok += data[i].locked_reads_ok;
     locked_reads_failed += data[i].locked_reads_failed;
     reads += data[i].nb_contains;
@@ -1312,8 +1649,9 @@ int main(int argc, char **argv)
   printf("  #val-w      : %lu (%f / s)\n", aborts_validate_write, aborts_validate_write * 1000.0 / duration);
   printf("  #val-c      : %lu (%f / s)\n", aborts_validate_commit, aborts_validate_commit * 1000.0 / duration);
   printf("  #inv-mem    : %lu (%f / s)\n", aborts_invalid_memory, aborts_invalid_memory * 1000.0 / duration);
-  printf("  #realloc    : %lu (%f / s)\n", aborts_reallocate, aborts_reallocate * 1000.0 / duration);
-  printf("  #r-over     : %lu (%f / s)\n", aborts_rollover, aborts_rollover * 1000.0 / duration);
+  printf("  #killed     : %lu (%f / s)\n", aborts_killed, aborts_killed * 1000.0 / duration);
+  printf("#aborts>=1    : %lu (%f / s)\n", aborts_1, aborts_1 * 1000.0 / duration);
+  printf("#aborts>=2    : %lu (%f / s)\n", aborts_2, aborts_2 * 1000.0 / duration);
   printf("#lr-ok        : %lu (%f / s)\n", locked_reads_ok, locked_reads_ok * 1000.0 / duration);
   printf("#lr-failed    : %lu (%f / s)\n", locked_reads_failed, locked_reads_failed * 1000.0 / duration);
   printf("Max retries   : %lu\n", max_retries);

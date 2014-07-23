@@ -26,7 +26,7 @@
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(TXPARAMS void *arg)
+static void mod_print_on_thread_init(TXPARAMS void *arg)
 {
   printf("==> on_thread_init()\n");
   fflush(NULL);
@@ -35,7 +35,7 @@ static void on_thread_init(TXPARAMS void *arg)
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(TXPARAMS void *arg)
+static void mod_print_on_thread_exit(TXPARAMS void *arg)
 {
   printf("==> on_thread_exit()\n");
   fflush(NULL);
@@ -44,7 +44,7 @@ static void on_thread_exit(TXPARAMS void *arg)
 /*
  * Called upon transaction start.
  */
-static void on_start(TXPARAMS void *arg)
+static void mod_print_on_start(TXPARAMS void *arg)
 {
   printf("==> on_start()\n");
   fflush(NULL);
@@ -53,7 +53,7 @@ static void on_start(TXPARAMS void *arg)
 /*
  * Called upon transaction commit.
  */
-static void on_commit(TXPARAMS void *arg)
+static void mod_print_on_commit(TXPARAMS void *arg)
 {
   printf("==> on_commit()\n");
   fflush(NULL);
@@ -62,7 +62,7 @@ static void on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void on_abort(TXPARAMS void *arg)
+static void mod_print_on_abort(TXPARAMS void *arg)
 {
   printf("==> on_abort()\n");
   fflush(NULL);
@@ -73,5 +73,5 @@ static void on_abort(TXPARAMS void *arg)
  */
 void mod_print_init()
 {
-  stm_register(on_thread_init, on_thread_exit, on_start, on_commit, on_abort, NULL);
+  stm_register(mod_print_on_thread_init, mod_print_on_thread_exit, mod_print_on_start, mod_print_on_commit, mod_print_on_abort, NULL);
 }

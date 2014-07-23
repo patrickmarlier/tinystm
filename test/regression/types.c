@@ -91,25 +91,25 @@ void compare(int idx, val_t val, int type, int size)
   switch(type) {
    case TYPE_UINT8:
      for (i = 0; i < 256 / sizeof(uint8_t); i++) {
-       v.u8 = stm_load8(&tab.u8[i]);
+       v.u8 = stm_load_u8(&tab.u8[i]);
        assert(i == idx ? v.u8 == val.u8 : v.u8 == tab_ro.u8[i]);
      }
      break;
    case TYPE_UINT16:
      for (i = 0; i < 256 / sizeof(uint16_t); i++) {
-       v.u16 = stm_load16(&tab.u16[i]);
+       v.u16 = stm_load_u16(&tab.u16[i]);
        assert(i == idx ? v.u16 == val.u16 : v.u16 == tab_ro.u16[i]);
      }
      break;
    case TYPE_UINT32:
      for (i = 0; i < 256 / sizeof(uint32_t); i++) {
-       v.u32 = stm_load32(&tab.u32[i]);
+       v.u32 = stm_load_u32(&tab.u32[i]);
        assert(i == idx ? v.u32 == val.u32 : v.u32 == tab_ro.u32[i]);
      }
      break;
    case TYPE_UINT64:
      for (i = 0; i < 256 / sizeof(uint64_t); i++) {
-       v.u64 = stm_load64(&tab.u64[i]);
+       v.u64 = stm_load_u64(&tab.u64[i]);
        assert(i == idx ? v.u64 == val.u64 : v.u64 == tab_ro.u64[i]);
      }
      break;
@@ -185,7 +185,7 @@ void compare(int idx, val_t val, int type, int size)
      break;
    case TYPE_BYTES:
      for (i = 0; i < 256 / sizeof(uint8_t); i++) {
-       v.u8 = stm_load8(&tab.u8[i]);
+       v.u8 = stm_load_u8(&tab.u8[i]);
        assert(i >= idx && i < idx + size ? v.u8 == ((uint8_t *)val.p)[i - idx] : v.u8 == tab_ro.u8[i]);
      }
      break;
@@ -198,54 +198,53 @@ void test_loads()
   val_t val;
   sigjmp_buf *e;
 
-  e = stm_get_env();
+  e = stm_start(NULL);
   if (e != NULL)
     sigsetjmp(*e, 0);
-  stm_start(e, NULL);
 
   if (verbose)
     printf("- Testing uint8_t\n");
   for (i = 0; i < 256 / sizeof(uint8_t); i++) {
-    val.u8 = stm_load8(&tab.u8[i]);
+    val.u8 = stm_load_u8(&tab.u8[i]);
     assert(val.u8 == tab_ro.u8[i]);
   }
   if (verbose)
     printf("- Testing uint16_t\n");
   for (i = 0; i < 256 / sizeof(uint16_t); i++) {
-    val.u16 = stm_load16(&tab.u16[i]);
+    val.u16 = stm_load_u16(&tab.u16[i]);
     assert(val.u16 == tab_ro.u16[i]);
   }
   if (verbose)
     printf("- Testing misaligned uint16_t\n");
   for (i = 1; i < 256 - sizeof(uint16_t); i += sizeof(uint16_t)) {
-    val.u16 = stm_load16((uint16_t *)&tab.u8[i]);
+    val.u16 = stm_load_u16((uint16_t *)&tab.u8[i]);
     assert(val.u16 == *(uint16_t *)&tab_ro.u8[i]);
   }
   if (verbose)
     printf("- Testing uint32_t\n");
   for (i = 0; i < 256 / sizeof(uint32_t); i++) {
-    val.u32 = stm_load32(&tab.u32[i]);
+    val.u32 = stm_load_u32(&tab.u32[i]);
     assert(val.u32 == tab_ro.u32[i]);
   }
   if (verbose)
     printf("- Testing misaligned uint32_t\n");
   for (j = 1; j < sizeof(uint32_t); j++) {
     for (i = j; i < 256 - sizeof(uint32_t); i += sizeof(uint32_t)) {
-      val.u32 = stm_load32((uint32_t *)&tab.u8[i]);
+      val.u32 = stm_load_u32((uint32_t *)&tab.u8[i]);
       assert(val.u32 == *(uint32_t *)&tab_ro.u8[i]);
     }
   }
   if (verbose)
     printf("- Testing uint64_t\n");
   for (i = 0; i < 256 / sizeof(uint64_t); i++) {
-    val.u64 = stm_load64(&tab.u64[i]);
+    val.u64 = stm_load_u64(&tab.u64[i]);
     assert(val.u64 == tab_ro.u64[i]);
   }
   if (verbose)
     printf("- Testing misaligned uint64_t\n");
   for (j = 1; j < sizeof(uint64_t); j++) {
     for (i = j; i < 256 - sizeof(uint64_t); i += sizeof(uint64_t)) {
-      val.u64 = stm_load64((uint64_t *)&tab.u8[i]);
+      val.u64 = stm_load_u64((uint64_t *)&tab.u8[i]);
       assert(val.u64 == *(uint64_t *)&tab_ro.u8[i]);
     }
   }
@@ -329,72 +328,71 @@ void test_stores()
   val_t val, bytes;
   sigjmp_buf *e;
 
-  e = stm_get_env();
+  e = stm_start(NULL);
   if (e != NULL)
     sigsetjmp(*e, 0);
-  stm_start(e, NULL);
 
   if (verbose)
     printf("- Testing uint8_t\n");
   for (i = 0; i < 256; i++) {
     val.u8 = ~tab_ro.u8[i];
-    stm_store8(&tab.u8[i], val.u8);
+    stm_store_u8(&tab.u8[i], val.u8);
     compare(i, val, TYPE_UINT8, 0);
-    stm_store8(&tab.u8[i], tab_ro.u8[i]);
+    stm_store_u8(&tab.u8[i], tab_ro.u8[i]);
   }
   if (verbose)
     printf("- Testing uint16_t\n");
   for (i = 0; i < 256 / sizeof(uint16_t); i++) {
     val.u16 = ~tab_ro.u16[i];
-    stm_store16(&tab.u16[i], val.u16);
+    stm_store_u16(&tab.u16[i], val.u16);
     compare(i, val, TYPE_UINT16, 0);
-    stm_store16(&tab.u16[i], tab_ro.u16[i]);
+    stm_store_u16(&tab.u16[i], tab_ro.u16[i]);
   }
   if (verbose)
     printf("- Testing misaligned uint16_t\n");
   for (i = 1; i < 256 - sizeof(uint16_t); i += sizeof(uint16_t)) {
     val.u16 = ~*(uint16_t *)&tab_ro.u8[i];
-    stm_store16((uint16_t *)&tab.u8[i], val.u16);
+    stm_store_u16((uint16_t *)&tab.u8[i], val.u16);
     bytes.p = &val.u16;
     compare(i, bytes, TYPE_BYTES, sizeof(uint16_t));
-    stm_store16((uint16_t *)&tab.u8[i], *(uint16_t *)&tab_ro.u8[i]);
+    stm_store_u16((uint16_t *)&tab.u8[i], *(uint16_t *)&tab_ro.u8[i]);
   }
   if (verbose)
     printf("- Testing uint32_t\n");
   for (i = 0; i < 256 / sizeof(uint32_t); i++) {
     val.u32 = ~tab_ro.u32[i];
-    stm_store32(&tab.u32[i], val.u32);
+    stm_store_u32(&tab.u32[i], val.u32);
     compare(i, val, TYPE_UINT32, 0);
-    stm_store32(&tab.u32[i], tab_ro.u32[i]);
+    stm_store_u32(&tab.u32[i], tab_ro.u32[i]);
   }
   if (verbose)
     printf("- Testing misaligned uint32_t\n");
   for (j = 1; j < sizeof(uint32_t); j++) {
     for (i = j; i < 256 - sizeof(uint32_t); i += sizeof(uint32_t)) {
       val.u32 = ~*(uint32_t *)&tab_ro.u8[i];
-      stm_store32((uint32_t *)&tab.u8[i], val.u32);
+      stm_store_u32((uint32_t *)&tab.u8[i], val.u32);
       bytes.p = &val.u32;
       compare(i, bytes, TYPE_BYTES, sizeof(uint32_t));
-      stm_store32((uint32_t *)&tab.u8[i], *(uint32_t *)&tab_ro.u8[i]);
+      stm_store_u32((uint32_t *)&tab.u8[i], *(uint32_t *)&tab_ro.u8[i]);
     }
   }
   if (verbose)
     printf("- Testing uint64_t\n");
   for (i = 0; i < 256 / sizeof(uint64_t); i++) {
     val.u64 = ~tab_ro.u64[i];
-    stm_store64(&tab.u64[i], val.u64);
+    stm_store_u64(&tab.u64[i], val.u64);
     compare(i, val, TYPE_UINT64, 0);
-    stm_store64(&tab.u64[i], tab_ro.u64[i]);
+    stm_store_u64(&tab.u64[i], tab_ro.u64[i]);
   }
   if (verbose)
     printf("- Testing misaligned uint64_t\n");
   for (j = 1; j < sizeof(uint64_t); j++) {
     for (i = j; i < 256 - sizeof(uint32_t); i += sizeof(uint32_t)) {
       val.u32 = ~*(uint32_t *)&tab_ro.u8[i];
-      stm_store32((uint32_t *)&tab.u8[i], val.u32);
+      stm_store_u32((uint32_t *)&tab.u8[i], val.u32);
       bytes.p = &val.u32;
       compare(i, bytes, TYPE_BYTES, sizeof(uint32_t));
-      stm_store32((uint32_t *)&tab.u8[i], *(uint32_t *)&tab_ro.u8[i]);
+      stm_store_u32((uint32_t *)&tab.u8[i], *(uint32_t *)&tab_ro.u8[i]);
     }
   }
   if (verbose)
@@ -504,12 +502,12 @@ void *test(void *v)
   seed = (unsigned int)time(0);
   stm_init_thread();
   while (stop == 0) {
-    nested = (rand_r(&seed) % 3 == 0);
-    store = (rand_r(&seed) % 3 == 0);
+    nested = (rand_r(&seed) < RAND_MAX / 3);
+    store = (rand_r(&seed) < RAND_MAX / 3);
     if (nested) {
-      e = stm_get_env();
-      sigsetjmp(*e, 0);
-      stm_start(e, NULL);
+      e = stm_start(NULL);
+      if (e != NULL)
+        sigsetjmp(*e, 0);
     }
     if (store)
       test_stores();

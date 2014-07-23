@@ -157,7 +157,7 @@ uint8_t tanger_stm_load1(tanger_stm_tx_t *tx, uint8_t *addr)
   if (on_stack(addr))
     return *addr;
 #endif /* ! NO_STACK_CHECK */
-  return stm_load8((struct stm_tx *)tx, addr);
+  return stm_load_u8((struct stm_tx *)tx, addr);
 }
 
 uint8_t tanger_stm_load8(tanger_stm_tx_t *tx, uint8_t *addr)
@@ -167,7 +167,7 @@ uint8_t tanger_stm_load8(tanger_stm_tx_t *tx, uint8_t *addr)
   if (on_stack(addr))
     return *addr;
 #endif /* ! NO_STACK_CHECK */
-  return stm_load8((struct stm_tx *)tx, addr);
+  return stm_load_u8((struct stm_tx *)tx, addr);
 }
 
 uint16_t tanger_stm_load16(tanger_stm_tx_t *tx, uint16_t *addr)
@@ -177,7 +177,7 @@ uint16_t tanger_stm_load16(tanger_stm_tx_t *tx, uint16_t *addr)
   if (on_stack(addr))
     return *addr;
 #endif /* ! NO_STACK_CHECK */
-  return stm_load16((struct stm_tx *)tx, addr);
+  return stm_load_u16((struct stm_tx *)tx, addr);
 }
 
 uint32_t tanger_stm_load32(tanger_stm_tx_t *tx, uint32_t *addr)
@@ -187,7 +187,7 @@ uint32_t tanger_stm_load32(tanger_stm_tx_t *tx, uint32_t *addr)
   if (on_stack(addr))
     return *addr;
 #endif /* ! NO_STACK_CHECK */
-  return stm_load32((struct stm_tx *)tx, addr);
+  return stm_load_u32((struct stm_tx *)tx, addr);
 }
 
 uint64_t tanger_stm_load64(tanger_stm_tx_t *tx, uint64_t *addr)
@@ -197,7 +197,7 @@ uint64_t tanger_stm_load64(tanger_stm_tx_t *tx, uint64_t *addr)
   if (on_stack(addr))
     return *addr;
 #endif /* ! NO_STACK_CHECK */
-  return stm_load64((struct stm_tx *)tx, addr);
+  return stm_load_u64((struct stm_tx *)tx, addr);
 }
 
 uint16_t tanger_stm_load16aligned(tanger_stm_tx_t *tx, uint16_t *addr)
@@ -207,7 +207,7 @@ uint16_t tanger_stm_load16aligned(tanger_stm_tx_t *tx, uint16_t *addr)
   if (on_stack(addr))
     return *addr;
 #endif /* ! NO_STACK_CHECK */
-  return stm_load16((struct stm_tx *)tx, addr);
+  return stm_load_u16((struct stm_tx *)tx, addr);
 }
 
 uint32_t tanger_stm_load32aligned(tanger_stm_tx_t *tx, uint32_t *addr)
@@ -219,7 +219,7 @@ uint32_t tanger_stm_load32aligned(tanger_stm_tx_t *tx, uint32_t *addr)
 #endif /* ! NO_STACK_CHECK */
   if (sizeof(stm_word_t) == 4)
     return (uint32_t)stm_load((struct stm_tx *)tx, (volatile stm_word_t *)addr);
-  return stm_load32((struct stm_tx *)tx, addr);
+  return stm_load_u32((struct stm_tx *)tx, addr);
 }
 
 uint64_t tanger_stm_load64aligned(tanger_stm_tx_t *tx, uint64_t *addr)
@@ -231,7 +231,7 @@ uint64_t tanger_stm_load64aligned(tanger_stm_tx_t *tx, uint64_t *addr)
 #endif /* ! NO_STACK_CHECK */
   if (sizeof(stm_word_t) == 8)
     return (uint64_t)stm_load((struct stm_tx *)tx, (volatile stm_word_t *)addr);
-  return stm_load64((struct stm_tx *)tx, addr);
+  return stm_load_u64((struct stm_tx *)tx, addr);
 }
 
 void tanger_stm_loadregion(tanger_stm_tx_t* tx, uint8_t *src, uintptr_t bytes, uint8_t *dest)
@@ -258,7 +258,7 @@ void tanger_stm_loadregionpost(tanger_stm_tx_t* tx, uint8_t *addr, uintptr_t byt
 void tanger_stm_store1(tanger_stm_tx_t *tx, uint8_t *addr, uint8_t value)
 {
   INC_STATS(nb_store1);
-  stm_store8((struct stm_tx *)tx, addr, value);
+  stm_store_u8((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store8(tanger_stm_tx_t *tx, uint8_t *addr, uint8_t value)
@@ -270,7 +270,7 @@ void tanger_stm_store8(tanger_stm_tx_t *tx, uint8_t *addr, uint8_t value)
     return;
   }
 #endif /* ! NO_STACK_CHECK */
-  stm_store8((struct stm_tx *)tx, addr, value);
+  stm_store_u8((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store16(tanger_stm_tx_t *tx, uint16_t *addr, uint16_t value)
@@ -282,7 +282,7 @@ void tanger_stm_store16(tanger_stm_tx_t *tx, uint16_t *addr, uint16_t value)
     return;
   }
 #endif /* ! NO_STACK_CHECK */
-  stm_store16((struct stm_tx *)tx, addr, value);
+  stm_store_u16((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store32(tanger_stm_tx_t *tx, uint32_t *addr, uint32_t value)
@@ -294,7 +294,7 @@ void tanger_stm_store32(tanger_stm_tx_t *tx, uint32_t *addr, uint32_t value)
     return;
   }
 #endif /* ! NO_STACK_CHECK */
-  stm_store32((struct stm_tx *)tx, addr, value);
+  stm_store_u32((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store64(tanger_stm_tx_t *tx, uint64_t *addr, uint64_t value)
@@ -306,7 +306,7 @@ void tanger_stm_store64(tanger_stm_tx_t *tx, uint64_t *addr, uint64_t value)
     return;
   }
 #endif /* ! NO_STACK_CHECK */
-  stm_store64((struct stm_tx *)tx, addr, value);
+  stm_store_u64((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store16aligned(tanger_stm_tx_t *tx, uint16_t *addr, uint16_t value)
@@ -318,7 +318,7 @@ void tanger_stm_store16aligned(tanger_stm_tx_t *tx, uint16_t *addr, uint16_t val
     return;
   }
 #endif /* ! NO_STACK_CHECK */
-  stm_store16((struct stm_tx *)tx, addr, value);
+  stm_store_u16((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store32aligned(tanger_stm_tx_t *tx, uint32_t *addr, uint32_t value)
@@ -332,7 +332,7 @@ void tanger_stm_store32aligned(tanger_stm_tx_t *tx, uint32_t *addr, uint32_t val
 #endif /* ! NO_STACK_CHECK */
   if (sizeof(stm_word_t) == 4)
     stm_store((struct stm_tx *)tx, (volatile stm_word_t *)addr, (stm_word_t)value);
-  stm_store32((struct stm_tx *)tx, addr, value);
+  stm_store_u32((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_store64aligned(tanger_stm_tx_t *tx, uint64_t *addr, uint64_t value)
@@ -346,7 +346,7 @@ void tanger_stm_store64aligned(tanger_stm_tx_t *tx, uint64_t *addr, uint64_t val
 #endif /* ! NO_STACK_CHECK */
   if (sizeof(stm_word_t) == 8)
     stm_store((struct stm_tx *)tx, (volatile stm_word_t *)addr, (stm_word_t)value);
-  stm_store64((struct stm_tx *)tx, addr, value);
+  stm_store_u64((struct stm_tx *)tx, addr, value);
 }
 
 void tanger_stm_storeregion(tanger_stm_tx_t* tx, uint8_t *src, uintptr_t bytes, uint8_t *dest)
@@ -445,7 +445,7 @@ void tanger_stm_init()
 # endif /* TANGER_STATS */
 #endif /* ! TLS */
   stm_init();
-  mod_mem_init();
+  mod_mem_init(0);
 }
 
 void tanger_stm_shutdown()

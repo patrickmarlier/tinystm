@@ -13,7 +13,7 @@ CFLAGS += -I$(TANGER_HOME)/include
 
 ########################################################################
 # Compilation options.  Note that the definitions from the main makefile
-# are not used here, so one can use different options for Tanger.
+# are not used here, so one can use different options here.
 ########################################################################
 
 # DEFINES += -DDESIGN=WRITE_BACK_ETL

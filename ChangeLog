@@ -1,3 +1,42 @@
+[1.0.0 release]
+
+2010-01-15  Pascal Felber  <pascal.felber@unine.ch>
+	* Changed rollover code.
+	* Added quiescence and serial-irrevocable mode.
+
+2009-12-18  Pascal Felber  <pascal.felber@unine.ch>
+	* Added commit/abort callbacks.
+	* Various fixes.
+
+2009-12-15  Pascal Felber  <pascal.felber@unine.ch>
+	* Updated irrevocability to work with modular contention manager.
+
+2009-11-29  Pascal Felber  <pascal.felber@unine.ch>
+	* Updated modules to avoid name conflicts.
+
+2009-11-20  Pascal Felber  <pascal.felber@unine.ch>
+	* Changed signature of stm_start().
+	* Added irrevokability.
+	* Added ABI for intel compiler and tm-gcc.
+	* Fixed a bug in mod_log.
+
+2009-09-25  Pascal Felber  <pascal.felber@unine.ch>
+	* Can disable alternation of insertion/removal in intset.
+
+2009-06-10  Pascal Felber  <pascal.felber@unine.ch>
+	* Added customizable (modular) contention manager.
+
+2009-03-08  Pascal Felber  <pascal.felber@unine.ch>
+	* Added some more statistics.
+	* Added call to conflict callback upon validation.
+
+2009-02-06  Pascal Felber  <pascal.felber@unine.ch>
+	* Added version number.
+	* Renamed mod_local module to mod_log and updated code.
+
+2009-02-06  Pascal Felber  <pascal.felber@unine.ch>
+	* Added abort reason as parameter of siglongjmp().
+
 [0.9.9 release]
 
 2009-01-29  Pascal Felber  <pascal.felber@unine.ch>
@@ -28,7 +67,7 @@
 2008-07-22  Pascal Felber  <pascal.felber@unine.ch>
 	* Added epoch-based memory allocator.
 	* Added conflict tracking and callback.
-	* Added skip list and refactored intset behchmark
+	* Added skip list and refactored intset benchmark
 	* Added mod_local module.
 	* Added functions to control extensions and read the clock.
 	* Added support for unit transactions in intset.

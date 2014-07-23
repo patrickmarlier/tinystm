@@ -37,6 +37,10 @@
  * ################################################################### */
 
 #define COMPILE_TIME_ASSERT(pred)       switch (0) { case 0: case pred: ; }
+#if defined(__GNUC__) || defined(__INTEL_COMPILER)
+# define likely(x)                      __builtin_expect(!!(x), 1)
+# define unlikely(x)                    __builtin_expect(!!(x), 0)
+#endif /* defined(__GNUC__) || defined(__INTEL_COMPILER) */
 
 /* Designs */
 #define WRITE_BACK_ETL                  0
@@ -57,34 +61,34 @@ static const char *design_names[] = {
 #define CM_SUICIDE                      0
 #define CM_DELAY                        1
 #define CM_BACKOFF                      2
-#define CM_PRIORITY                     3
+#define CM_MODULAR                      3
 
 static const char *cm_names[] = {
   /* 0 */ "SUICIDE",
   /* 1 */ "DELAY",
   /* 2 */ "BACKOFF",
-  /* 3 */ "PRIORITY"
+  /* 3 */ "MODULAR"
 };
 
 #ifndef CM
 # define CM                             CM_SUICIDE
 #endif /* ! CM */
 
-#if DESIGN == WRITE_BACK_CTL && CM == CM_PRIORITY
-# error "PRIORITY contention manager cannot be used with CTL design"
-#endif /* DESIGN == WRITE_BACK_CTL && CM == CM_PRIORITY */
-
-#if DESIGN != WRITE_BACK_ETL && defined(READ_LOCKED_DATA)
-# error "READ_LOCKED_DATA can only be used with WB-ETL design"
-#endif /* DESIGN != WRITE_BACK_ETL && defined(READ_LOCKED_DATA) */
+#if DESIGN != WRITE_BACK_ETL && CM == CM_MODULAR
+# error "MODULAR contention manager can only be used with WB-ETL design"
+#endif /* DESIGN != WRITE_BACK_ETL && CM == CM_MODULAR */
 
 #if defined(CONFLICT_TRACKING) && ! defined(EPOCH_GC)
 # error "CONFLICT_TRACKING requires EPOCH_GC"
 #endif /* defined(CONFLICT_TRACKING) && ! defined(EPOCH_GC) */
 
-#if defined(READ_LOCKED_DATA) && ! defined(EPOCH_GC)
-# error "READ_LOCKED_DATA requires EPOCH_GC"
-#endif /* defined(READ_LOCKED_DATA) && ! defined(EPOCH_GC) */
+#if CM == CM_MODULAR && ! defined(EPOCH_GC)
+# error "MODULAR contention manager requires EPOCH_GC"
+#endif /* CM == CM_MODULAR && ! defined(EPOCH_GC) */
+
+#if defined(READ_LOCKED_DATA) && CM != CM_MODULAR
+# error "READ_LOCKED_DATA can only be used with MODULAR contention manager"
+#endif /* defined(READ_LOCKED_DATA) && CM != CM_MODULAR */
 
 #ifdef EXPLICIT_TX_PARAMETER
 # define TX_RETURN                      return tx
@@ -136,53 +140,18 @@ static const char *cm_names[] = {
 # endif /* MAX_BACKOFF */
 #endif /* CM == CM_BACKOFF */
 
-#if CM == CM_PRIORITY
+#if CM == CM_MODULAR
 # define VR_THRESHOLD                   "VR_THRESHOLD"
 # ifndef VR_THRESHOLD_DEFAULT
 #  define VR_THRESHOLD_DEFAULT          3
 # endif /* VR_THRESHOLD_DEFAULT */
 static int vr_threshold;
-# define CM_THRESHOLD                   "CM_THRESHOLD"
-# ifndef CM_THRESHOLD_DEFAULT
-#  define CM_THRESHOLD_DEFAULT          0
-# endif /* CM_THRESHOLD_DEFAULT */
-static int cm_threshold;
-#endif /* CM == CM_PRIORITY */
+#endif /* CM == CM_MODULAR */
+
+#define NO_SIGNAL_HANDLER               "NO_SIGNAL_HANDLER"
 
 #define XSTR(s)                         STR(s)
 #define STR(s)                          #s
-
-/* ################################################################### *
- * COMPATIBILITY FUNCTIONS
- * ################################################################### */
-
-#if CM == CM_PRIORITY
-
-# if defined(__CYGWIN__)
-/* WIN32 (CYGWIN) */
-#  include <malloc.h>
-inline int posix_memalign(void **memptr, size_t alignment, size_t size)
-{
-  if ((*memptr = memalign(alignment, size)) == NULL)
-    return 1;
-  return 0;
-}
-# elif defined(__APPLE__)
-/* OS X */
-inline int posix_memalign(void **memptr, size_t alignment, size_t size)
-{
-  if ((*memptr = valloc(size)) == NULL)
-    return 1;
-  /* Assume that alignment is a power of 2 */
-  if (((stm_word_t)*memptr & (alignment - 1)) != 0) {
-    free (*memptr);
-    return 1;
-  }
-  return 0;
-}
-# endif /* defined(__APPLE__) */
-
-#endif /* CM == CM_PRIORITY */
 
 /* ################################################################### *
  * TYPES
@@ -190,10 +159,29 @@ inline int posix_memalign(void **memptr, size_t alignment, size_t size)
 
 enum {                                  /* Transaction status */
   TX_IDLE = 0,
-  TX_ACTIVE = 1,
-  TX_COMMITTED = 2,
-  TX_ABORTED = 3
+  TX_ACTIVE = 1,                        /* Lowest bit indicates activity */
+  TX_COMMITTED = (1 << 1),
+  TX_ABORTED = (2 << 1),
+  TX_COMMITTING = (1 << 1) | TX_ACTIVE,
+  TX_ABORTING = (2 << 1) | TX_ACTIVE,
+  TX_KILLED = (3 << 1) | TX_ACTIVE,
+  TX_IRREVOCABLE = 0x08 | TX_ACTIVE     /* Fourth bit indicates irrevocability */
 };
+#define STATUS_BITS                     4
+#define STATUS_MASK                     ((1 << STATUS_BITS) - 1)
+
+#if CM == CM_MODULAR
+# define SET_STATUS(s, v)               ATOMIC_STORE_REL(&(s), ((s) & ~(stm_word_t)STATUS_MASK) | (v))
+# define INC_STATUS_COUNTER(s)          ((((s) >> STATUS_BITS) + 1) << STATUS_BITS)
+# define UPDATE_STATUS(s, v)            ATOMIC_STORE_REL(&(s), INC_STATUS_COUNTER(s) | (v))
+# define GET_STATUS(s)                  ((s) & STATUS_MASK)
+# define GET_STATUS_COUNTER(s)          ((s) >> STATUS_BITS)
+#else /* CM != CM_MODULAR */
+# define SET_STATUS(s, v)               ((s) = (v))
+# define UPDATE_STATUS(s, v)            ((s) = (v))
+# define GET_STATUS(s)                  ((s))
+#endif /* CM != CM_MODULAR */
+#define IS_ACTIVE(s)                    ((GET_STATUS(s) & 0x01) == TX_ACTIVE) 
 
 typedef struct r_entry {                /* Read set entry */
   stm_word_t version;                   /* Version read */
@@ -214,18 +202,16 @@ typedef struct w_entry {                /* Write set entry */
       stm_word_t mask;                  /* Write mask */
       stm_word_t version;               /* Version overwritten */
       volatile stm_word_t *lock;        /* Pointer to lock (for fast access) */
-#if defined(READ_LOCKED_DATA) || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH)
+#if CM == CM_MODULAR || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH)
       struct stm_tx *tx;                /* Transaction owning the write set */
-#endif /* defined(READ_LOCKED_DATA) || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH) */
+#endif /* CM == CM_MODULAR || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH) */
 #if DESIGN == WRITE_BACK_ETL
       struct w_entry *next;             /* Next address covered by same lock (if any) */
 #else /* DESIGN != WRITE_BACK_ETL */
       int no_drop;                      /* Should we drop lock upon abort? */
 #endif /* DESIGN != WRITE_BACK_ETL */
     };
-#if DESIGN == WRITE_BACK_ETL && CM == CM_PRIORITY
-    stm_word_t padding[8];              /* Padding (must be a multiple of 32 bytes) */
-#endif /* DESIGN == WRITE_BACK_ETL && CM == CM_PRIORITY */
+    stm_word_t padding[8];              /* Padding (multiple of a cache line) */
   };
 } w_entry_t;
 
@@ -234,7 +220,7 @@ typedef struct w_set {                  /* Write set */
   int nb_entries;                       /* Number of entries */
   int size;                             /* Size of array */
 #if DESIGN == WRITE_BACK_ETL
-  int reallocate;                       /* Reallocate on next start */
+  int has_writes;                       /* Has the write set any real write (vs. visible reads) */
 #elif DESIGN == WRITE_BACK_CTL
   int nb_acquired;                      /* Number of locks acquired */
 # ifdef USE_BLOOM_FILTER
@@ -243,45 +229,54 @@ typedef struct w_set {                  /* Write set */
 #endif /* DESIGN == WRITE_BACK_CTL */
 } w_set_t;
 
+typedef struct cb_entry {               /* Callback entry */
+  void (*f)(TXPARAMS void *);           /* Function */
+  void *arg;                            /* Argument to be passed to function */
+} cb_entry_t;
+
 #ifndef MAX_SPECIFIC
 # define MAX_SPECIFIC                   16
 #endif /* MAX_SPECIFIC */
 
 typedef struct stm_tx {                 /* Transaction descriptor */
+  sigjmp_buf env;                       /* Environment for setjmp/longjmp (must be first field!) */
   stm_tx_attr_t *attr;                  /* Transaction attributes (user-specified) */
-  stm_word_t status;                    /* Transaction status (not read by other threads) */
+  volatile stm_word_t status;           /* Transaction status */
   stm_word_t start;                     /* Start timestamp */
   stm_word_t end;                       /* End timestamp (validity range) */
   r_set_t r_set;                        /* Read set */
   w_set_t w_set;                        /* Write set */
-  sigjmp_buf env;                       /* Environment for setjmp/longjmp */
-  sigjmp_buf *jmp;                      /* Pointer to environment (NULL when not using setjmp/longjmp) */
+  unsigned int ro:1;                    /* Is this execution read-only? */
+  unsigned int can_extend:1;            /* Can this transaction be extended? */
+#ifdef IRREVOCABLE_ENABLED
+  unsigned int irrevocable:4;           /* Is this execution irrevocable? */
+#endif /* IRREVOCABLE_ENABLED */
   int nesting;                          /* Nesting level */
-  int ro;                               /* Is this execution read-only? */
-  int can_extend;                       /* Can this transaction be extended? */
+#if CM == CM_MODULAR
+  stm_word_t timestamp;                 /* Timestamp (not changed upon restart) */
+#endif /* CM == CM_MODULAR */
   void *data[MAX_SPECIFIC];             /* Transaction-specific data (fixed-size array for better speed) */
-#ifdef READ_LOCKED_DATA
-  stm_word_t id;                        /* Instance number of the transaction */
-#endif /* READ_LOCKED_DATA */
+  struct stm_tx *next;                  /* For keeping track of all transactional threads */
 #ifdef CONFLICT_TRACKING
   pthread_t thread_id;                  /* Thread identifier (immutable) */
 #endif /* CONFLICT_TRACKING */
-#if CM == CM_DELAY || CM == CM_PRIORITY
+#if CM == CM_DELAY || CM == CM_MODULAR
   volatile stm_word_t *c_lock;          /* Pointer to contented lock (cause of abort) */
-#endif /* CM == CM_DELAY || CM == CM_PRIORITY */
+#endif /* CM == CM_DELAY || CM == CM_MODULAR */
 #if CM == CM_BACKOFF
   unsigned long backoff;                /* Maximum backoff duration */
   unsigned long seed;                   /* RNG seed */
 #endif /* CM == CM_BACKOFF */
-#if CM == CM_PRIORITY
-  int priority;                         /* Transaction priority */
+#if CM == CM_MODULAR
   int visible_reads;                    /* Should we use visible reads? */
-#endif /* CM == CM_PRIORITY */
-#if CM == CM_PRIORITY || defined(INTERNAL_STATS)
+#endif /* CM == CM_MODULAR */
+#if CM == CM_MODULAR || defined(INTERNAL_STATS)
   unsigned long retries;                /* Number of consecutive aborts (retries) */
-#endif /* CM == CM_PRIORITY || defined(INTERNAL_STATS) */
+#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) */
 #ifdef INTERNAL_STATS
   unsigned long aborts;                 /* Total number of aborts (cumulative) */
+  unsigned long aborts_1;               /* Total number of transactions that abort once or more (cumulative) */
+  unsigned long aborts_2;               /* Total number of transactions that abort twice or more (cumulative) */
   unsigned long aborts_ro;              /* Aborts due to wrong read-only specification (cumulative) */
   unsigned long aborts_locked_read;     /* Aborts due to trying to read when locked (cumulative) */
   unsigned long aborts_locked_write;    /* Aborts due to trying to write when locked (cumulative) */
@@ -289,22 +284,30 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   unsigned long aborts_validate_write;  /* Aborts due to failed validation upon write (cumulative) */
   unsigned long aborts_validate_commit; /* Aborts due to failed validation upon commit (cumulative) */
   unsigned long aborts_invalid_memory;  /* Aborts due to invalid memory access (cumulative) */
-# if DESIGN == WRITE_BACK_ETL
-  unsigned long aborts_reallocate;      /* Aborts due to write set reallocation (cumulative) */
-# endif /* DESIGN == WRITE_BACK_ETL */
-# ifdef ROLLOVER_CLOCK
-  unsigned long aborts_rollover;        /* Aborts due to clock rolling over (cumulative) */
-# endif /* ROLLOVER_CLOCK */
+# if CM == CM_MODULAR
+  unsigned long aborts_killed;          /* Aborts due to being killed (cumulative) */
+# endif /* CM == CM_MODULAR */
 # ifdef READ_LOCKED_DATA
   unsigned long locked_reads_ok;        /* Successful reads of previous value */
   unsigned long locked_reads_failed;    /* Failed reads of previous value */
 # endif /* READ_LOCKED_DATA */
   unsigned long max_retries;            /* Maximum number of consecutive aborts (retries) */
 #endif /* INTERNAL_STATS */
-//  char pad[64];
 } stm_tx_t;
 
 static int nb_specific = 0;             /* Number of specific slots used (<= MAX_SPECIFIC) */
+
+static int initialized = 0;             /* Has the library been initialized? */
+
+pthread_mutex_t quiesce_mutex;          /* Mutex to support quiescence */
+pthread_cond_t quiesce_cond;            /* Condition variable to support quiescence */
+volatile stm_word_t quiesce;            /* Prevent threads from entering transactions upon quiescence */
+volatile stm_word_t threads_count;      /* Number of active threads */
+stm_tx_t *threads;                      /* Head of linked list of threads */
+
+#ifdef IRREVOCABLE_ENABLED
+static volatile stm_word_t irrevocable = 0;
+#endif /* IRREVOCABLE_ENABLED */
 
 /*
  * Transaction nesting is supported in a minimalist way (flat nesting):
@@ -342,11 +345,6 @@ static int nb_specific = 0;             /* Number of specific slots used (<= MAX
  * CALLBACKS
  * ################################################################### */
 
-typedef struct cb_entry {               /* Callback entry */
-  void (*f)(TXPARAMS void *);           /* Function */
-  void *arg;                            /* Argument to be passed to function */
-} cb_entry_t;
-
 #define MAX_CB                          16
 
 /* Declare as static arrays (vs. lists) to improve cache locality */
@@ -371,7 +369,7 @@ static void (*conflict_cb)(stm_tx_t *, stm_tx_t *) = NULL;
  * ################################################################### */
 
 #ifdef TLS
-static __thread stm_tx_t* thread_tx;
+static __thread stm_tx_t* thread_tx = NULL;
 #else /* ! TLS */
 static pthread_key_t thread_tx;
 #endif /* ! TLS */
@@ -400,39 +398,40 @@ static pthread_key_t thread_tx;
  *   - The high order bits contain the commit time.
  *   - The low order bits contain an incarnation number (incremented
  *     upon abort while writing the covered memory addresses).
- * When using the PRIORITY contention manager, the format of locks is
- * slightly different. It is documented elsewhere.
+ * When visible reads are enabled, two bits are used as read and write
+ * locks. A read-locked address can be read by an invisible reader.
  */
 
-#define OWNED_MASK                      0x01                /* 1 bit */
-#if CM == CM_PRIORITY
-# define WAIT_MASK                      0x02                /* 1 bit */
-# define PRIORITY_BITS                  3                   /* 3 bits */
-# define PRIORITY_MAX                   ((1 << PRIORITY_BITS) - 1)
-# define PRIORITY_MASK                  (PRIORITY_MAX << 2)
-# define ALIGNMENT                      (1 << (PRIORITY_BITS + 2))
-# define ALIGNMENT_MASK                 (ALIGNMENT - 1)
-#endif /* CM == CM_PRIORITY */
+#if CM == CM_MODULAR
+# define OWNED_BITS                     2                   /* 2 bits */
+# define WRITE_MASK                     0x01                /* 1 bit */
+# define READ_MASK                      0x02                /* 1 bit */
+# define OWNED_MASK                     (WRITE_MASK | READ_MASK)
+#else /* CM != CM_MODULAR */
+# define OWNED_BITS                     1                   /* 1 bit */
+# define WRITE_MASK                     0x01                /* 1 bit */
+# define OWNED_MASK                     (WRITE_MASK)
+#endif /* CM != CM_MODULAR */
 #if DESIGN == WRITE_THROUGH
 # define INCARNATION_BITS               3                   /* 3 bits */
 # define INCARNATION_MAX                ((1 << INCARNATION_BITS) - 1)
 # define INCARNATION_MASK               (INCARNATION_MAX << 1)
-# define VERSION_MAX                    (~(stm_word_t)0 >> (1 + INCARNATION_BITS))
+# define LOCK_BITS                      (OWNED_BITS + INCARNATION_BITS)
 #else /* DESIGN != WRITE_THROUGH */
-# define VERSION_MAX                    (~(stm_word_t)0 >> 1)
+# define LOCK_BITS                      (OWNED_BITS)
 #endif /* DESIGN != WRITE_THROUGH */
+#define MAX_THREADS                     8192                /* Upper bound (large enough) */
+#define VERSION_MAX                     ((~(stm_word_t)0 >> LOCK_BITS) - MAX_THREADS)
 
 #define LOCK_GET_OWNED(l)               (l & OWNED_MASK)
-#if CM == CM_PRIORITY
-# define LOCK_SET_ADDR(a, p)            (a | (p << 2) | OWNED_MASK)
-# define LOCK_GET_WAIT(l)               (l & WAIT_MASK)
-# define LOCK_GET_PRIORITY(l)           ((l & PRIORITY_MASK) >> 2)
-# define LOCK_SET_PRIORITY_WAIT(l, p)   ((l & ~(stm_word_t)PRIORITY_MASK) | (p << 2) | WAIT_MASK)
-# define LOCK_GET_ADDR(l)               (l & ~(stm_word_t)(OWNED_MASK | WAIT_MASK | PRIORITY_MASK))
-#else /* CM != CM_PRIORITY */
-# define LOCK_SET_ADDR(a)               (a | OWNED_MASK)    /* OWNED bit set */
-# define LOCK_GET_ADDR(l)               (l & ~(stm_word_t)OWNED_MASK)
-#endif /* CM != CM_PRIORITY */
+#define LOCK_GET_WRITE(l)               (l & WRITE_MASK)
+#define LOCK_SET_ADDR_WRITE(a)          (a | WRITE_MASK)    /* WRITE bit set */
+#define LOCK_GET_ADDR(l)                (l & ~(stm_word_t)OWNED_MASK)
+#if CM == CM_MODULAR
+# define LOCK_GET_READ(l)               (l & READ_MASK)
+# define LOCK_SET_ADDR_READ(a)          (a | READ_MASK)     /* READ bit set */
+# define LOCK_UPGRADE(l)                (l | WRITE_MASK)
+#endif /* CM == CM_MODULAR */
 #if DESIGN == WRITE_THROUGH
 # define LOCK_GET_TIMESTAMP(l)          (l >> (1 + INCARNATION_BITS))
 # define LOCK_SET_TIMESTAMP(t)          (t << (1 + INCARNATION_BITS))
@@ -440,8 +439,8 @@ static pthread_key_t thread_tx;
 # define LOCK_SET_INCARNATION(i)        (i << 1)            /* OWNED bit not set */
 # define LOCK_UPD_INCARNATION(l, i)     ((l & ~(stm_word_t)(INCARNATION_MASK | OWNED_MASK)) | LOCK_SET_INCARNATION(i))
 #else /* DESIGN != WRITE_THROUGH */
-# define LOCK_GET_TIMESTAMP(l)          (l >> 1)         /* Logical shift (unsigned) */
-# define LOCK_SET_TIMESTAMP(t)          (t << 1)            /* OWNED bit not set */
+# define LOCK_GET_TIMESTAMP(l)          (l >> OWNED_BITS)   /* Logical shift (unsigned) */
+# define LOCK_SET_TIMESTAMP(t)          (t << OWNED_BITS)   /* OWNED bits not set */
 #endif /* DESIGN != WRITE_THROUGH */
 #define LOCK_UNIT                       (~(stm_word_t)0)
 
@@ -505,6 +504,79 @@ static inline stm_tx_t *stm_get_tx()
 #endif /* ! TLS */
 }
 
+#if CM == CM_MODULAR
+# define KILL_SELF                      0x00
+# define KILL_OTHER                     0x01
+# define DELAY_RESTART                  0x04
+
+# define RR_CONFLICT                    0x00
+# define RW_CONFLICT                    0x01
+# define WR_CONFLICT                    0x02
+# define WW_CONFLICT                    0x03
+
+static int (*contention_manager)(stm_tx_t *, stm_tx_t *, int) = NULL;
+
+/*
+ * Kill other.
+ */
+int cm_aggressive(struct stm_tx *me, struct stm_tx *other, int conflict)
+{
+  return KILL_OTHER;
+}
+
+/*
+ * Kill self.
+ */
+int cm_suicide(struct stm_tx *me, struct stm_tx *other, int conflict)
+{
+  return KILL_SELF;
+}
+
+/*
+ * Kill self and wait before restart.
+ */
+int cm_delay(struct stm_tx *me, struct stm_tx *other, int conflict)
+{
+  return KILL_SELF | DELAY_RESTART;
+}
+
+/*
+ * Oldest transaction has priority.
+ */
+int cm_timestamp(struct stm_tx *me, struct stm_tx *other, int conflict)
+{
+  if (me->timestamp < other->timestamp)
+    return KILL_OTHER;
+  if (me->timestamp == other->timestamp && (uintptr_t)me < (uintptr_t)other)
+    return KILL_OTHER;
+  return KILL_SELF | DELAY_RESTART;
+}
+
+/*
+ * Transaction with more work done has priority. 
+ */
+int cm_karma(struct stm_tx *me, struct stm_tx *other, int conflict)
+{
+  if ((me->w_set.nb_entries << 1) + me->r_set.nb_entries < (other->w_set.nb_entries << 1) + other->r_set.nb_entries)
+    return KILL_OTHER;
+  if (((me->w_set.nb_entries << 1) + me->r_set.nb_entries == (other->w_set.nb_entries << 1) + other->r_set.nb_entries) && (uintptr_t)me < (uintptr_t)other )
+    return KILL_OTHER;
+  return KILL_SELF;
+}
+
+struct {
+  const char *name;
+  int (*f)(stm_tx_t *, stm_tx_t *, int);
+} cms[] = {
+  { "aggressive", cm_aggressive },
+  { "suicide", cm_suicide },
+  { "delay", cm_delay },
+  { "timestamp", cm_timestamp },
+  { "karma", cm_karma },
+  { NULL, NULL }
+};
+#endif /* CM == CM_MODULAR */
+
 #ifdef LOCK_IDX_SWAP
 /*
  * Compute index in lock table (swap bytes to avoid consecutive addresses to have neighboring locks).
@@ -514,105 +586,224 @@ static inline unsigned int lock_idx_swap(unsigned int idx) {
 }
 #endif /* LOCK_IDX_SWAP */
 
-#ifdef ROLLOVER_CLOCK
 /*
- * We use a simple approach for clock roll-over:
- * - We maintain the count of (active) transactions using a counter
- *   protected by a mutex. This approach is not very efficient but the
- *   cost is quickly amortized because we only modify the counter when
- *   creating and deleting a transaction descriptor, which typically
- *   happens much less often than starting and committing a transaction.
- * - We detect overflows when reading the clock or when incrementing it.
- *   Upon overflow, we wait until all threads have blocked on a barrier.
- * - Threads can block on the barrier upon overflow when they (1) start
- *   a transaction, or (2) delete a transaction. This means that threads
- *   must ensure that they properly delete their transaction descriptor
- *   before performing any blocking operation outside of a transaction
- *   in order to guarantee liveness (our model prohibits blocking
- *   inside a transaction).
+ * Initialize quiescence support.
  */
-
-pthread_mutex_t tx_count_mutex;
-pthread_cond_t tx_reset;
-int tx_count;
-int tx_overflow;
-
-/*
- * Enter new transactional thread.
- */
-static inline void stm_rollover_enter(stm_tx_t *tx)
+static inline void stm_quiesce_init()
 {
-  PRINT_DEBUG("==> stm_rollover_enter(%p)\n", tx);
+  PRINT_DEBUG("==> stm_quiesce_init()\n");
 
-  pthread_mutex_lock(&tx_count_mutex);
-  while (tx_overflow != 0)
-    pthread_cond_wait(&tx_reset, &tx_count_mutex);
-  /* One more (active) transaction */
-  tx_count++;
-  pthread_mutex_unlock(&tx_count_mutex);
-}
-
-/*
- * Exit transactional thread.
- */
-static inline void stm_rollover_exit(stm_tx_t *tx)
-{
-  PRINT_DEBUG("==> stm_rollover_exit(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
-
-  pthread_mutex_lock(&tx_count_mutex);
-  /* One less (active) transaction */
-  tx_count--;
-  assert(tx_count >= 0);
-  /* Are all transactions stopped? */
-  if (tx_overflow != 0 && tx_count == 0) {
-    /* Yes: reset clock */
-    memset((void *)locks, 0, LOCK_ARRAY_SIZE * sizeof(stm_word_t));
-    CLOCK = 0;
-    tx_overflow = 0;
-# ifdef EPOCH_GC
-    /* Reset GC */
-    gc_reset();
-# endif /* EPOCH_GC */
-    /* Wake up all thread */
-    pthread_cond_broadcast(&tx_reset);
+  if (pthread_mutex_init(&quiesce_mutex, NULL) != 0) {
+    fprintf(stderr, "Error creating mutex\n");
+    exit(1);
   }
-  pthread_mutex_unlock(&tx_count_mutex);
+  if (pthread_cond_init(&quiesce_cond, NULL) != 0) {
+    fprintf(stderr, "Error creating condition variable\n");
+    exit(1);
+  }
+  quiesce = 0;
+  threads_count = 0;
+  threads = NULL;
 }
 
 /*
- * Clock overflow.
+ * Clean up quiescence support.
  */
-static inline void stm_overflow(stm_tx_t *tx)
+static inline void stm_quiesce_exit()
 {
-  PRINT_DEBUG("==> stm_overflow(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
+  PRINT_DEBUG("==> stm_quiesce_exit()\n");
 
-  pthread_mutex_lock(&tx_count_mutex);
-  /* Set overflow flag (might already be set) */
-  tx_overflow = 1;
-  /* One less (active) transaction */
-  tx_count--;
-  assert(tx_count >= 0);
-  /* Are all transactions stopped? */
-  if (tx_count == 0) {
-    /* Yes: reset clock */
-    memset((void *)locks, 0, LOCK_ARRAY_SIZE * sizeof(stm_word_t));
-    CLOCK = 0;
-    tx_overflow = 0;
-# ifdef EPOCH_GC
-    /* Reset GC */
-    gc_reset();
-# endif /* EPOCH_GC */
-    /* Wake up all thread */
-    pthread_cond_broadcast(&tx_reset);
+  pthread_cond_destroy(&quiesce_cond);
+  pthread_mutex_destroy(&quiesce_mutex);
+}
+
+/*
+ * Called by each thread upon initialization for quiescence support.
+ */
+static inline void stm_quiesce_enter_thread(stm_tx_t *tx)
+{
+  PRINT_DEBUG("==> stm_quiesce_enter_thread(%p)\n", tx);
+
+  pthread_mutex_lock(&quiesce_mutex);
+  /* Add new descriptor at head of list */
+  tx->next = threads;
+  threads = tx;
+  threads_count++;
+  pthread_mutex_unlock(&quiesce_mutex);
+}
+
+/*
+ * Called by each thread upon exit for quiescence support.
+ */
+static inline void stm_quiesce_exit_thread(stm_tx_t *tx)
+{
+  stm_tx_t *t, *p;
+
+  PRINT_DEBUG("==> stm_quiesce_exit_thread(%p)\n", tx);
+
+  /* Can only be called if non-active */
+  assert(!IS_ACTIVE(tx->status));
+
+  pthread_mutex_lock(&quiesce_mutex);
+  /* Remove descriptor from list */
+  p = NULL;
+  t = threads;
+  while (t != tx) {
+    assert(t != NULL);
+    p = t;
+    t = t->next;
+  }
+  if (p == NULL)
+    threads = t->next;
+  else
+    p->next = t->next;
+  threads_count--;
+  if (quiesce) {
+    /* Wake up someone in case other threads are waiting for us */
+    pthread_cond_signal(&quiesce_cond);
+  }
+  pthread_mutex_unlock(&quiesce_mutex);
+}
+
+/*
+ * Wait for all transactions to be block on a barrier.
+ */
+static inline void stm_quiesce_barrier(stm_tx_t *tx, void (*f)(void *), void *arg)
+{
+  PRINT_DEBUG("==> stm_quiesce_barrier()\n");
+
+  /* Can only be called if non-active */
+  assert(tx == NULL || !IS_ACTIVE(tx->status));
+
+  pthread_mutex_lock(&quiesce_mutex);
+  /* Wait for all other transactions to block on barrier */
+  threads_count--;
+  if (quiesce == 0) {
+    /* We are first on the barrier */
+    quiesce = 1;
+  }
+  while (quiesce) {
+    if (threads_count == 0) {
+      /* Everybody is blocked */
+      if (f != NULL)
+        f(arg);
+      /* Release transactional threads */
+      quiesce = 0;
+      pthread_cond_broadcast(&quiesce_cond);
+    } else {
+      /* Wait for other transactions to stop */
+      pthread_cond_wait(&quiesce_cond, &quiesce_mutex);
+    }
+  }
+  threads_count++;
+  pthread_mutex_unlock(&quiesce_mutex);
+}
+
+/*
+ * Wait for all transactions to be be out of their current transaction.
+ */
+static inline int stm_quiesce(stm_tx_t *tx, int block)
+{
+  stm_tx_t *t;
+#if CM == CM_MODULAR
+  stm_word_t s, c;
+#endif /* CM == CM_MODULAR */
+
+  PRINT_DEBUG("==> stm_quiesce(%p)\n", tx);
+
+  if (IS_ACTIVE(tx->status)) {
+    /* Only one active transaction can quiesce at a time, others must abort */
+    if (pthread_mutex_trylock(&quiesce_mutex) != 0)
+      return 1;
   } else {
-    /* No: wait for other transactions to stop */
-    pthread_cond_wait(&tx_reset, &tx_count_mutex);
+    /* We can safely block because we are inactive */
+    pthread_mutex_lock(&quiesce_mutex);
   }
-  /* One more (active) transaction */
-  tx_count++;
-  pthread_mutex_unlock(&tx_count_mutex);
+  /* We own the lock at this point */
+  if (block)
+    ATOMIC_STORE_REL(&quiesce, 2); // FIXME
+  /* Make sure we read latest status data */
+  ATOMIC_MB_FULL; // FIXME
+  /* Not optimal as we check transaction sequentially and might miss some inactivity states */
+  for (t = threads; t != NULL; t = t->next) {
+    if (t == tx)
+      continue;
+    /* Wait for all other transactions to become inactive */
+#if CM == CM_MODULAR
+    s = t->status;
+    if (IS_ACTIVE(s)) {
+      c = GET_STATUS_COUNTER(s);
+      do {
+        s = t->status;
+      } while (IS_ACTIVE(s) && c == GET_STATUS_COUNTER(s));
+    }
+#else /* CM != CM_MODULAR */
+//    while (ATOMIC_LOAD(&t->status) != TX_IDLE) // FIXME
+    while (IS_ACTIVE(t->status))
+      ;
+#endif /* CM != CM_MODULAR */
+  }
+  if (!block)
+    pthread_mutex_unlock(&quiesce_mutex);
+  return 0;
 }
-#endif /* ROLLOVER_CLOCK */
+
+/*
+ * Check if transaction must block.
+ */
+static inline int stm_check_quiesce(stm_tx_t *tx)
+{
+  stm_word_t s;
+
+  /* Must be called upon start (while already active but before acquiring any lock) */
+  assert(IS_ACTIVE(tx->status));
+
+#ifdef IRREVOCABLE_ENABLED
+  if ((tx->irrevocable & 0x08) != 0) {
+    /* Serial irrevocable mode: we are executing alone */
+    return 0;
+  }
+#endif
+  ATOMIC_MB_FULL; // FIXME
+  if (ATOMIC_LOAD_ACQ(&quiesce) == 2) { // FIXME
+    s = ATOMIC_LOAD(&tx->status);
+    SET_STATUS(tx->status, TX_IDLE);
+    while (ATOMIC_LOAD_ACQ(&quiesce) == 2) { // FIXME
+#ifdef WAIT_YIELD
+      sched_yield();
+#endif /* WAIT_YIELD */
+    }
+    SET_STATUS(tx->status, GET_STATUS(s));
+    return 1;
+  }
+  return 0;
+}
+
+/*
+ * Release threads blocked after quiescence.
+ */
+static inline void stm_quiesce_release(stm_tx_t *tx)
+{
+  ATOMIC_STORE_REL(&quiesce, 0); // FIXME
+  pthread_mutex_unlock(&quiesce_mutex);
+}
+
+/*
+ * Reset clock and timestamps
+ */
+static inline void rollover_clock(void *arg)
+{
+  PRINT_DEBUG("==> rollover_clock()\n");
+
+  /* Reset clock */
+  CLOCK = 0;
+  /* Reset timestamps */
+  memset((void *)locks, 0, LOCK_ARRAY_SIZE * sizeof(stm_word_t));
+# ifdef EPOCH_GC
+  /* Reset GC */
+  gc_reset();
+# endif /* EPOCH_GC */
+}
 
 /*
  * Check if stripe has been read previously.
@@ -623,9 +814,6 @@ static inline r_entry_t *stm_has_read(stm_tx_t *tx, volatile stm_word_t *lock)
   int i;
 
   PRINT_DEBUG("==> stm_has_read(%p[%lu-%lu],%p)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, lock);
-
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
 
   /* Look for read */
   r = tx->r_set.entries;
@@ -652,9 +840,6 @@ static inline w_entry_t *stm_has_written(stm_tx_t *tx, volatile stm_word_t *addr
 
   PRINT_DEBUG("==> stm_has_written(%p[%lu-%lu],%p)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, addr);
 
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
-
 # ifdef USE_BLOOM_FILTER
   mask = FILTER_BITS(addr);
   if ((tx->w_set.bloom & mask) != mask)
@@ -677,18 +862,19 @@ static inline w_entry_t *stm_has_written(stm_tx_t *tx, volatile stm_word_t *addr
  */
 static inline void stm_allocate_rs_entries(stm_tx_t *tx, int extend)
 {
+  PRINT_DEBUG("==> stm_allocate_rs_entries(%p[%lu-%lu],%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, extend);
+
   if (extend) {
     /* Extend read set */
     tx->r_set.size *= 2;
-    PRINT_DEBUG2("==> reallocate read set (%p[%lu-%lu],%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, tx->r_set.size);
     if ((tx->r_set.entries = (r_entry_t *)realloc(tx->r_set.entries, tx->r_set.size * sizeof(r_entry_t))) == NULL) {
-      perror("realloc");
+      perror("realloc read set");
       exit(1);
     }
   } else {
     /* Allocate read set */
     if ((tx->r_set.entries = (r_entry_t *)malloc(tx->r_set.size * sizeof(r_entry_t))) == NULL) {
-      perror("malloc");
+      perror("malloc read set");
       exit(1);
     }
   }
@@ -699,38 +885,61 @@ static inline void stm_allocate_rs_entries(stm_tx_t *tx, int extend)
  */
 static inline void stm_allocate_ws_entries(stm_tx_t *tx, int extend)
 {
-#if defined(READ_LOCKED_DATA) || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH)
+#if CM == CM_MODULAR || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH)
   int i, first = (extend ? tx->w_set.size : 0);
-#endif /* defined(READ_LOCKED_DATA) || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH) */
+#endif /* CM == CM_MODULAR || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH) */
+
+  PRINT_DEBUG("==> stm_allocate_ws_entries(%p[%lu-%lu],%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, extend);
 
   if (extend) {
     /* Extend write set */
-    tx->w_set.size *= 2;
-    PRINT_DEBUG("==> reallocate write set (%p[%lu-%lu],%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, tx->w_set.size);
-    if ((tx->w_set.entries = (w_entry_t *)realloc(tx->w_set.entries, tx->w_set.size * sizeof(w_entry_t))) == NULL) {
-      perror("realloc");
+#if DESIGN == WRITE_BACK_ETL
+    int j;
+    w_entry_t *ows, *nws;
+    /* Allocate new write set */
+    ows = tx->w_set.entries;
+    if ((nws = (w_entry_t *)malloc(tx->w_set.size * 2 * sizeof(w_entry_t))) == NULL) {
+      perror("malloc write set");
       exit(1);
     }
+    /* Copy write set */
+    memcpy(nws, ows, tx->w_set.size * sizeof(w_entry_t));
+    /* Update pointers and locks */
+    for (j = 0; j < tx->w_set.nb_entries; j++) {
+      if (ows[j].next != NULL)
+        nws[j].next = nws + (ows[j].next - ows);
+    }
+    for (j = 0; j < tx->w_set.nb_entries; j++) {
+      if (ows[j].lock == GET_LOCK(ows[j].addr)) 
+        ATOMIC_STORE_REL(ows[j].lock, LOCK_SET_ADDR_WRITE((stm_word_t)&nws[j]));
+    }
+    tx->w_set.entries = nws;
+    tx->w_set.size *= 2;
+# ifdef EPOCH_GC
+    gc_free(ows, tx->start);
+# else /* ! EPOCH_GC */
+    free(ows);
+# endif /* ! EPOCH_GC */
+#else /* DESIGN != WRITE_BACK_ETL */
+    tx->w_set.size *= 2;
+    if ((tx->w_set.entries = (w_entry_t *)realloc(tx->w_set.entries, tx->w_set.size * sizeof(w_entry_t))) == NULL) {
+      perror("realloc write set");
+      exit(1);
+    }
+#endif /* DESIGN != WRITE_BACK_ETL */
   } else {
     /* Allocate write set */
-#if CM == CM_PRIORITY && DESIGN == WRITE_BACK_ETL
-    if (posix_memalign((void **)&tx->w_set.entries, ALIGNMENT, tx->w_set.size * sizeof(w_entry_t)) != 0) {
-      fprintf(stderr, "Error: cannot allocate aligned memory\n");
-      exit(1);
-    }
-#else /* CM != CM_PRIORITY || DESIGN != WRITE_BACK_ETL */
     if ((tx->w_set.entries = (w_entry_t *)malloc(tx->w_set.size * sizeof(w_entry_t))) == NULL) {
-      perror("malloc");
+      perror("malloc write set");
       exit(1);
     }
-#endif /* CM != CM_PRIORITY || DESIGN != WRITE_BACK_ETL */
   }
 
-#if defined(READ_LOCKED_DATA) || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH)
+#if CM == CM_MODULAR || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH)
   /* Initialize fields */
   for (i = first; i < tx->w_set.size; i++)
     tx->w_set.entries[i].tx = tx;
-#endif /* defined(READ_LOCKED_DATA) || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH) */
+#endif /* CM == CM_MODULAR || (defined(CONFLICT_TRACKING) && DESIGN != WRITE_THROUGH) */
 }
 
 /*
@@ -743,9 +952,6 @@ static inline int stm_validate(stm_tx_t *tx)
   stm_word_t l;
 
   PRINT_DEBUG("==> stm_validate(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
-
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
 
   /* Validate reads */
   r = tx->r_set.entries;
@@ -764,6 +970,17 @@ static inline int stm_validate(stm_tx_t *tx)
 #endif /* DESIGN != WRITE_THROUGH */
       {
         /* Locked by another transaction: cannot validate */
+#ifdef CONFLICT_TRACKING
+        if (conflict_cb != NULL && l != LOCK_UNIT) {
+          /* Call conflict callback */
+# if DESIGN == WRITE_THROUGH
+          stm_tx_t *other = (stm_tx_t *)LOCK_GET_ADDR(l);
+# else /* DESIGN != WRITE_THROUGH */
+          stm_tx_t *other = ((w_entry_t *)LOCK_GET_ADDR(l))->tx;
+# endif /* DESIGN != WRITE_THROUGH */
+          conflict_cb(tx, other);
+        }
+#endif /* CONFLICT_TRACKING */
         return 0;
       }
       /* We own the lock: OK */
@@ -793,17 +1010,12 @@ static inline int stm_extend(stm_tx_t *tx)
 
   PRINT_DEBUG("==> stm_extend(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
-
   /* Get current time */
   now = GET_CLOCK;
-#ifdef ROLLOVER_CLOCK
   if (now >= VERSION_MAX) {
     /* Clock overflow */
     return 0;
   }
-#endif /* ROLLOVER_CLOCK */
   /* Try to validate read set */
   if (stm_validate(tx)) {
     /* It works: we can extend until now */
@@ -813,30 +1025,180 @@ static inline int stm_extend(stm_tx_t *tx)
   return 0;
 }
 
+#if CM == CM_MODULAR
+/*
+ * Kill other transaction.
+ */
+static inline int stm_kill(stm_tx_t *tx, stm_tx_t *other, stm_word_t status)
+{
+  stm_word_t c, t;
+
+  PRINT_DEBUG("==> stm_kill(%p[%lu-%lu],%p,s=%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, other, status);
+
+# ifdef CONFLICT_TRACKING
+  if (conflict_cb != NULL)
+    conflict_cb(tx, other);
+# endif /* CONFLICT_TRACKING */
+
+# ifdef IRREVOCABLE_ENABLED
+  if (GET_STATUS(status) == TX_IRREVOCABLE)
+    return 0;
+# endif /* IRREVOCABLE_ENABLED */
+  if (GET_STATUS(status) == TX_ABORTED || GET_STATUS(status) == TX_COMMITTED || GET_STATUS(status) == TX_KILLED)
+    return 0;
+  if (GET_STATUS(status) == TX_ABORTING || GET_STATUS(status) == TX_COMMITTING) {
+    /* Transaction is already aborting or committing: wait */
+    while (other->status == status)
+      ;
+    return 0;
+  }
+  assert(IS_ACTIVE(status));
+  /* Set status to KILLED */
+  if (ATOMIC_CAS_FULL(&other->status, status, status + (TX_KILLED - TX_ACTIVE)) == 0) {
+    /* Transaction is committing/aborting (or has committed/aborted) */
+    c = GET_STATUS_COUNTER(status);
+    do {
+      t = other->status;
+# ifdef IRREVOCABLE_ENABLED
+      if (GET_STATUS(t) == TX_IRREVOCABLE)
+        return 0;
+# endif /* IRREVOCABLE_ENABLED */
+    } while (GET_STATUS(t) != TX_ABORTED && GET_STATUS(t) != TX_COMMITTED && GET_STATUS(t) != TX_KILLED && GET_STATUS_COUNTER(t) == c);
+    return 0;
+  }
+  /* We have killed the transaction: we can steal the lock */
+  return 1;
+}
+
+/*
+ * Drop locks after having been killed.
+ */
+static inline void stm_drop(stm_tx_t *tx)
+{
+  w_entry_t *w;
+  stm_word_t l;
+  int i;
+
+  PRINT_DEBUG("==> stm_drop(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
+
+  /* Drop locks */
+  i = tx->w_set.nb_entries;
+  if (i > 0) {
+    w = tx->w_set.entries;
+    for (; i > 0; i--, w++) {
+      l = ATOMIC_LOAD_ACQ(w->lock);
+      if (LOCK_GET_OWNED(l) && (w_entry_t *)LOCK_GET_ADDR(l) == w) {
+        /* Drop using CAS */
+        ATOMIC_CAS_FULL(w->lock, l, LOCK_SET_TIMESTAMP(w->version));
+        /* If CAS fail, lock has been stolen or already released in case a lock covers multiple addresses */
+      }
+    }
+    /* We need to reallocate the write set to avoid an ABA problem (the
+     * transaction could reuse the same entry after having been killed
+     * and restarted, and another slow transaction could steal the lock
+     * using CAS without noticing the restart) */
+    gc_free(tx->w_set.entries, tx->start);
+    stm_allocate_ws_entries(tx, 0);
+  }
+}
+#endif /* CM == CM_MODULAR */
+
+/*
+ * Initialize the transaction descriptor before start or restart.
+ */
+static inline void stm_prepare(stm_tx_t *tx)
+{
+#if CM == CM_MODULAR
+  if (tx->visible_reads >= vr_threshold && vr_threshold >= 0) {
+    /* Use visible read */
+    if (tx->attr != NULL && tx->attr->read_only) {
+      /* Update attributes to inform the caller */
+      tx->attr->read_only = 0;
+    }
+    tx->ro = 0;
+  }
+#endif /* CM == CM_MODULAR */
+ start:
+  /* Start timestamp */
+  tx->start = tx->end = GET_CLOCK; /* OPT: Could be delayed until first read/write */
+
+  /* Allow extensions */
+  tx->can_extend = 1;
+  if (tx->start >= VERSION_MAX) {
+    /* Block all transactions and reset clock */
+    stm_quiesce_barrier(tx, rollover_clock, NULL);
+    goto start;
+  }
+#if CM == CM_MODULAR
+  if (tx->retries == 0)
+    tx->timestamp = tx->start;
+#endif /* CM == CM_MODULAR */
+  /* Read/write set */
+#if DESIGN == WRITE_BACK_ETL
+  tx->w_set.has_writes = 0;
+#elif DESIGN == WRITE_BACK_CTL
+  tx->w_set.nb_acquired = 0;
+# ifdef USE_BLOOM_FILTER
+  tx->w_set.bloom = 0;
+# endif /* USE_BLOOM_FILTER */
+#endif /* DESIGN == WRITE_BACK_CTL */
+  tx->w_set.nb_entries = 0;
+  tx->r_set.nb_entries = 0;
+
+#ifdef EPOCH_GC
+  gc_set_epoch(tx->start);
+#endif /* EPOCH_GC */
+
+#ifdef IRREVOCABLE_ENABLED
+  if (tx->irrevocable != 0) {
+    assert(!IS_ACTIVE(tx->status));
+    // UPDATE_STATUS(tx->status, TX_IDLE); // FIXME
+    stm_set_irrevocable(TXARGS -1);
+    UPDATE_STATUS(tx->status, TX_IRREVOCABLE);
+  } else
+    UPDATE_STATUS(tx->status, TX_ACTIVE);
+#else /* ! IRREVOCABLE_ENABLED */
+  /* Set status */
+  UPDATE_STATUS(tx->status, TX_ACTIVE);
+#endif /* ! IRREVOCABLE_ENABLED */
+
+  stm_check_quiesce(tx);
+}
+
 /*
  * Rollback transaction.
  */
-static inline void stm_rollback(stm_tx_t *tx)
+static inline void stm_rollback(stm_tx_t *tx, int reason)
 {
   w_entry_t *w;
 #if DESIGN != WRITE_BACK_CTL
   int i;
 #endif /* DESIGN != WRITE_BACK_CTL */
-#if DESIGN == WRITE_THROUGH
+#if DESIGN == WRITE_THROUGH || CM == CM_MODULAR
   stm_word_t t;
-#endif /* DESIGN == WRITE_THROUGH */
+#endif /* DESIGN == WRITE_THROUGH || CM == CM_MODULAR */
 #if CM == CM_BACKOFF
   unsigned long wait;
   volatile int j;
 #endif /* CM == CM_BACKOFF */
-#ifdef READ_LOCKED_DATA
-  stm_word_t id;
-#endif /* READ_LOCKED_DATA */
 
   PRINT_DEBUG("==> stm_rollback(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
+  assert(IS_ACTIVE(tx->status));
+#if CM == CM_MODULAR
+  /* Set status to ABORTING */
+  t = tx->status;
+  if (GET_STATUS(t) == TX_KILLED || (GET_STATUS(t) == TX_ACTIVE && ATOMIC_CAS_FULL(&tx->status, t, t + (TX_ABORTING - TX_ACTIVE)) == 0)) {
+    /* We have been killed */
+    assert(GET_STATUS(tx->status) == TX_KILLED);
+# ifdef INTERNAL_STATS
+    tx->aborts_killed++;
+# endif /* INTERNAL_STATS */
+    /* Release locks */
+    stm_drop(tx);
+    goto dropped;
+  }
+#endif /* CM == CM_MODULAR */
 
 #if DESIGN == WRITE_THROUGH
   t = 0;
@@ -844,8 +1206,6 @@ static inline void stm_rollback(stm_tx_t *tx)
   w = tx->w_set.entries + tx->w_set.nb_entries;
   while (w != tx->w_set.entries) {
     w--;
-    PRINT_DEBUG2("==> undo(t=%p[%lu-%lu],a=%p,d=%p-%lu,v=%lu,m=0x%lx)\n",
-                 tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (unsigned long)w->value, (unsigned long)w->version, (unsigned long)w->mask);
     if (w->mask != 0)
       ATOMIC_STORE(w->addr, w->value);
     if (w->no_drop)
@@ -855,16 +1215,8 @@ static inline void stm_rollback(stm_tx_t *tx)
     if (i > INCARNATION_MAX) {
       /* Simple approach: write new version (might trigger unnecessary aborts) */
       if (t == 0) {
+        /* Get new version (may exceed VERSION_MAX by up to MAX_THREADS) */
         t = FETCH_INC_CLOCK + 1;
-        if (t >= VERSION_MAX) {
-# ifdef ROLLOVER_CLOCK
-          /* We can still use VERSION_MAX for protecting read-only trasanctions from dirty reads */
-          t = VERSION_MAX;
-# else /* ! ROLLOVER_CLOCK */
-          fprintf(stderr, "Exceeded maximum version number: 0x%lx\n", (unsigned long)t);
-          exit(1);
-# endif /* ! ROLLOVER_CLOCK */
-        }
       }
       ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
     } else {
@@ -876,27 +1228,15 @@ static inline void stm_rollback(stm_tx_t *tx)
   /* Drop locks */
   i = tx->w_set.nb_entries;
   if (i > 0) {
-# ifdef READ_LOCKED_DATA
-    /* Update instance number (becomes odd) */
-    id = tx->id;
-    assert(id % 2 == 0);
-    ATOMIC_STORE_REL(&tx->id, id + 1);
-# endif /* READ_LOCKED_DATA */
     w = tx->w_set.entries;
     for (; i > 0; i--, w++) {
       if (w->next == NULL) {
         /* Only drop lock for last covered address in write set */
         ATOMIC_STORE(w->lock, LOCK_SET_TIMESTAMP(w->version));
       }
-      PRINT_DEBUG2("==> discard(t=%p[%lu-%lu],a=%p,d=%p-%lu,v=%lu)\n",
-                   tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (unsigned long)w->value, (unsigned long)w->version);
     }
     /* Make sure that all lock releases become visible */
     ATOMIC_MB_WRITE;
-# ifdef READ_LOCKED_DATA
-    /* Update instance number (becomes even) */
-    ATOMIC_STORE_REL(&tx->id, id + 2);
-# endif /* READ_LOCKED_DATA */
   }
 #else /* DESIGN == WRITE_BACK_CTL */
   if (tx->w_set.nb_acquired > 0) {
@@ -910,18 +1250,24 @@ static inline void stm_rollback(stm_tx_t *tx)
         } else {
           ATOMIC_STORE(w->lock, LOCK_SET_TIMESTAMP(w->version));
         }
-        PRINT_DEBUG2("==> discard(t=%p[%lu-%lu],a=%p,d=%p-%lu,v=%lu)\n",
-                     tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (unsigned long)w->value, (unsigned long)w->version);
       }
     } while (tx->w_set.nb_acquired > 0);
   }
 #endif /* DESIGN == WRITE_BACK_CTL */
 
-#if CM == CM_PRIORITY || defined(INTERNAL_STATS)
+#if CM == CM_MODULAR
+ dropped:
+#endif /* CM == CM_MODULAR */
+
+#if CM == CM_MODULAR || defined(INTERNAL_STATS)
   tx->retries++;
-#endif /* CM == CM_PRIORITY || defined(INTERNAL_STATS) */
+#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) */
 #ifdef INTERNAL_STATS
   tx->aborts++;
+  if (tx->retries == 1)
+    tx->aborts_1++;
+  else if (tx->retries == 2)
+    tx->aborts_2++;
   if (tx->max_retries < tx->retries)
     tx->max_retries = tx->retries;
 #endif /* INTERNAL_STATS */
@@ -933,11 +1279,11 @@ static inline void stm_rollback(stm_tx_t *tx)
       abort_cb[cb].f(TXARGS abort_cb[cb].arg);
   }
 
-  /* Set status (no need for CAS or atomic op) */
-  tx->status = TX_ABORTED;
+  /* Set status to ABORTED */
+  SET_STATUS(tx->status, TX_ABORTED);
 
   /* Reset nesting level */
-  tx->nesting = 0;
+  tx->nesting = 1;
 
 #if CM == CM_BACKOFF
   /* Simple RNG (good enough for backoff) */
@@ -952,7 +1298,7 @@ static inline void stm_rollback(stm_tx_t *tx)
     tx->backoff <<= 1;
 #endif /* CM == CM_BACKOFF */
 
-#if CM == CM_DELAY || CM == CM_PRIORITY
+#if CM == CM_DELAY || CM == CM_MODULAR
   /* Wait until contented lock is free */
   if (tx->c_lock != NULL) {
     /* Busy waiting (yielding is expensive) */
@@ -963,11 +1309,428 @@ static inline void stm_rollback(stm_tx_t *tx)
     }
     tx->c_lock = NULL;
   }
-#endif /* CM == CM_DELAY || CM == CM_PRIORITY */
+#endif /* CM == CM_DELAY || CM == CM_MODULAR */
+
+  /* Reset field to restart transaction */
+  stm_prepare(tx);
+
   /* Jump back to transaction start */
-  if (tx->jmp != NULL)
-    siglongjmp(*tx->jmp, 1);
+  if (tx->attr == NULL || !tx->attr->no_retry)
+    siglongjmp(tx->env, reason);
 }
+
+/*
+ * Load a word-sized value (invisible read).
+ */
+static inline stm_word_t stm_read_invisible(stm_tx_t *tx, volatile stm_word_t *addr)
+{
+  volatile stm_word_t *lock;
+  stm_word_t l, l2, value, version;
+  r_entry_t *r;
+#if DESIGN == WRITE_BACK_ETL
+  w_entry_t *w;
+#endif /* DESIGN == WRITE_BACK_ETL */
+#if DESIGN == WRITE_BACK_CTL
+  w_entry_t *written = NULL;
+#endif /* DESIGN == WRITE_BACK_CTL */
+#if CM == CM_MODULAR
+  stm_word_t t;
+  int decision;
+#endif /* CM == CM_MODULAR */
+
+  PRINT_DEBUG2("==> stm_read_invisible(t=%p[%lu-%lu],a=%p)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, addr);
+
+#if CM != CM_MODULAR
+  assert(IS_ACTIVE(tx->status));
+#endif /* CM != CM_MODULAR */
+
+#if DESIGN == WRITE_BACK_CTL
+  /* Did we previously write the same address? */
+  written = stm_has_written(tx, addr);
+  if (written != NULL) {
+    /* Yes: get value from write set if possible */
+    if (written->mask == ~(stm_word_t)0) {
+      value = written->value;
+      /* No need to add to read set */
+      return value;
+    }
+  }
+#endif /* DESIGN == WRITE_BACK_CTL */
+
+  /* Get reference to lock */
+  lock = GET_LOCK(addr);
+
+  /* Note: we could check for duplicate reads and get value from read set */
+
+  /* Read lock, value, lock */
+ restart:
+  l = ATOMIC_LOAD_ACQ(lock);
+ restart_no_load:
+  if (LOCK_GET_WRITE(l)) {
+    /* Locked */
+    if (l == LOCK_UNIT) {
+      /* Data modified by a unit store: should not last long => retry */
+      goto restart;
+    }
+    /* Do we own the lock? */
+#if DESIGN == WRITE_THROUGH
+    if (tx == (stm_tx_t *)LOCK_GET_ADDR(l)) {
+      /* Yes: we have a version locked by us that was valid at write time */
+      value = ATOMIC_LOAD(addr);
+      /* No need to add to read set (will remain valid) */
+      return value;
+    }
+#elif DESIGN == WRITE_BACK_ETL
+    w = (w_entry_t *)LOCK_GET_ADDR(l);
+    /* Simply check if address falls inside our write set (avoids non-faulting load) */
+    if (tx->w_set.entries <= w && w < tx->w_set.entries + tx->w_set.nb_entries) {
+      /* Yes: did we previously write the same address? */
+      while (1) {
+        if (addr == w->addr) {
+          /* Yes: get value from write set (or from memory if mask was empty) */
+          value = (w->mask == 0 ? ATOMIC_LOAD(addr) : w->value);
+          break;
+        }
+        if (w->next == NULL) {
+          /* No: get value from memory */
+          value = ATOMIC_LOAD(addr);
+# if CM == CM_MODULAR
+          if (GET_STATUS(tx->status) == TX_KILLED) {
+            stm_rollback(tx, STM_ABORT_KILLED);
+            return 0;
+          }
+# endif
+          break;
+        }
+        w = w->next;
+      }
+      /* No need to add to read set (will remain valid) */
+      return value;
+    }
+#endif /* DESIGN == WRITE_BACK_ETL */
+#if DESIGN == WRITE_BACK_CTL
+    /* Spin while locked (should not last long) */
+    goto restart;
+#else /* DESIGN != WRITE_BACK_CTL */
+    /* Conflict: CM kicks in (we could also check for duplicate reads and get value from read set) */
+# if CM != CM_MODULAR && defined(IRREVOCABLE_ENABLED)
+    if(tx->irrevocable) {
+      /* Spin while locked */
+      goto restart;
+    }
+# endif /* CM != CM_MODULAR && defined(IRREVOCABLE_ENABLED) */
+# if CM == CM_MODULAR
+    t = w->tx->status;
+    l2 = ATOMIC_LOAD_ACQ(lock);
+    if (l != l2) {
+      l = l2;
+      goto restart_no_load;
+    }
+    if (t != w->tx->status) {
+      /* Transaction status has changed: restart the whole procedure */
+      goto restart;
+    }
+#  ifdef READ_LOCKED_DATA
+#   ifdef IRREVOCABLE_ENABLED
+    if (IS_ACTIVE(t) && !tx->irrevocable)
+#   else /* ! IRREVOCABLE_ENABLED */
+    if (GET_STATUS(t) == TX_ACTIVE)
+#   endif /* ! IRREVOCABLE_ENABLED */
+    {
+      /* Read old version */
+      version = ATOMIC_LOAD(&w->version);
+      /* Read data */
+      value = ATOMIC_LOAD(addr);
+      /* Check that data has not been written */
+      if (t != w->tx->status) {
+        /* Data concurrently modified: a new version might be available => retry */
+        goto restart;
+      }
+      if (version >= tx->start && (version <= tx->end || (!tx->ro && tx->can_extend && stm_extend(tx)))) {
+      /* Success */
+#  ifdef INTERNAL_STATS
+        tx->locked_reads_ok++;
+#  endif /* INTERNAL_STATS */
+        goto add_to_read_set;
+      }
+      /* Invalid version: not much we can do => fail */
+#  ifdef INTERNAL_STATS
+      tx->locked_reads_failed++;
+#  endif /* INTERNAL_STATS */
+    }
+#  endif /* READ_LOCKED_DATA */
+    if (GET_STATUS(t) == TX_KILLED) {
+      /* We can safely steal lock */
+      decision = KILL_OTHER;
+    } else {
+      decision =
+#  ifdef IRREVOCABLE_ENABLED
+        GET_STATUS(tx->status) == TX_IRREVOCABLE ? KILL_OTHER :
+        GET_STATUS(t) == TX_IRREVOCABLE ? KILL_SELF :
+#  endif /* IRREVOCABLE_ENABLED */
+        GET_STATUS(tx->status) == TX_KILLED ? KILL_SELF :
+        (contention_manager != NULL ? contention_manager(tx, w->tx, WR_CONFLICT) : KILL_SELF);
+      if (decision == KILL_OTHER) {
+        /* Kill other */
+        if (!stm_kill(tx, w->tx, t)) {
+          /* Transaction may have committed or aborted: retry */
+          goto restart;
+        }
+      }
+    }
+    if (decision == KILL_OTHER) {
+      /* Steal lock */
+      l2 = LOCK_SET_TIMESTAMP(w->version);
+      if (ATOMIC_CAS_FULL(lock, l, l2) == 0)
+        goto restart;
+      l = l2;
+      goto restart_no_load;
+    }
+    /* Kill self */
+    if ((decision & DELAY_RESTART) != 0)
+      tx->c_lock = lock;
+# elif CM == CM_DELAY
+    tx->c_lock = lock;
+# endif /* CM == CM_DELAY */
+    /* Abort */
+# ifdef INTERNAL_STATS
+    tx->aborts_locked_read++;
+# endif /* INTERNAL_STATS */
+# ifdef CONFLICT_TRACKING
+    if (conflict_cb != NULL && l != LOCK_UNIT) {
+      /* Call conflict callback */
+#  if DESIGN == WRITE_THROUGH
+      stm_tx_t *other = (stm_tx_t *)LOCK_GET_ADDR(l);
+#  else /* DESIGN != WRITE_THROUGH */
+      stm_tx_t *other = ((w_entry_t *)LOCK_GET_ADDR(l))->tx;
+#  endif /* DESIGN != WRITE_THROUGH */
+      conflict_cb(tx, other);
+    }
+# endif /* CONFLICT_TRACKING */
+    stm_rollback(tx, STM_ABORT_RW_CONFLICT);
+    return 0;
+#endif /* DESIGN != WRITE_BACK_CTL */
+  } else {
+    /* Not locked */
+    value = ATOMIC_LOAD_ACQ(addr);
+    l2 = ATOMIC_LOAD_ACQ(lock);
+    if (l != l2) {
+      l = l2;
+      goto restart_no_load;
+    }
+#ifdef IRREVOCABLE_ENABLED
+    /* In irrevocable mode, no need check timestamp nor add entry to read set */
+    if (tx->irrevocable)
+      return value;
+#endif /* IRREVOCABLE_ENABLED */
+    /* Check timestamp */
+#if CM == CM_MODULAR
+    if (LOCK_GET_READ(l))
+      version = ((w_entry_t *)LOCK_GET_ADDR(l))->version;
+    else
+      version = LOCK_GET_TIMESTAMP(l);
+#else /* CM != CM_MODULAR */
+    version = LOCK_GET_TIMESTAMP(l);
+#endif /* CM != CM_MODULAR */
+    /* Valid version? */
+    if (version > tx->end) {
+#ifdef IRREVOCABLE_ENABLED
+      assert(!tx->irrevocable);
+#endif /* IRREVOCABLE_ENABLED */
+      /* No: try to extend first (except for read-only transactions: no read set) */
+      if (tx->ro || !tx->can_extend || !stm_extend(tx)) {
+        /* Not much we can do: abort */
+#if CM == CM_MODULAR
+        /* Abort caused by invisible reads */
+        tx->visible_reads++;
+#endif /* CM == CM_MODULAR */
+#ifdef INTERNAL_STATS
+        tx->aborts_validate_read++;
+#endif /* INTERNAL_STATS */
+        stm_rollback(tx, STM_ABORT_VAL_READ);
+        return 0;
+      }
+      /* Verify that version has not been overwritten (read value has not
+       * yet been added to read set and may have not been checked during
+       * extend) */
+      l = ATOMIC_LOAD_ACQ(lock);
+      if (l != l2) {
+        l = l2;
+        goto restart_no_load;
+      }
+      /* Worked: we now have a good version (version <= tx->end) */
+    }
+#if CM == CM_MODULAR
+    /* Check if killed (necessary to avoid possible race on read-after-write) */
+    if (GET_STATUS(tx->status) == TX_KILLED) {
+      stm_rollback(tx, STM_ABORT_KILLED);
+      return 0;
+    }
+#endif /* CM == CM_MODULAR */
+  }
+  /* We have a good version: add to read set (update transactions) and return value */
+
+#if DESIGN == WRITE_BACK_CTL
+  /* Did we previously write the same address? */
+  if (written != NULL) {
+    value = (value & ~written->mask) | (written->value & written->mask);
+    /* Must still add to read set */
+  }
+#endif /* DESIGN == WRITE_BACK_CTL */
+#ifdef READ_LOCKED_DATA
+ add_to_read_set:
+#endif /* READ_LOCKED_DATA */
+  if (!tx->ro) {
+#ifdef NO_DUPLICATES_IN_RW_SETS
+    if (stm_has_read(tx, lock) != NULL)
+      return value;
+#endif /* NO_DUPLICATES_IN_RW_SETS */
+    /* Add address and version to read set */
+    if (tx->r_set.nb_entries == tx->r_set.size)
+      stm_allocate_rs_entries(tx, 1);
+    r = &tx->r_set.entries[tx->r_set.nb_entries++];
+    r->version = version;
+    r->lock = lock;
+  }
+  return value;
+}
+
+#if CM == CM_MODULAR
+/*
+ * Load a word-sized value (visible read).
+ */
+static inline stm_word_t stm_read_visible(stm_tx_t *tx, volatile stm_word_t *addr)
+{
+  volatile stm_word_t *lock;
+  stm_word_t l, l2, t, value, version;
+  w_entry_t *w;
+  int decision;
+
+  PRINT_DEBUG2("==> stm_read_visible(t=%p[%lu-%lu],a=%p)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, addr);
+
+  if (GET_STATUS(tx->status) == TX_KILLED) {
+    stm_rollback(tx, STM_ABORT_KILLED);
+    return 0;
+  }
+
+  /* Get reference to lock */
+  lock = GET_LOCK(addr);
+
+  /* Try to acquire lock */
+ restart:
+  l = ATOMIC_LOAD_ACQ(lock);
+ restart_no_load:
+  if (LOCK_GET_OWNED(l)) {
+    /* Locked */
+    if (l == LOCK_UNIT) {
+      /* Data modified by a unit store: should not last long => retry */
+      goto restart;
+    }
+    /* Do we own the lock? */
+    w = (w_entry_t *)LOCK_GET_ADDR(l);
+    /* Simply check if address falls inside our write set (avoids non-faulting load) */
+    if (tx->w_set.entries <= w && w < tx->w_set.entries + tx->w_set.nb_entries) {
+      /* Yes: is it only read-locked? */
+      if (!LOCK_GET_WRITE(l)) {
+        /* Yes: get value from memory */
+        value = ATOMIC_LOAD(addr);
+      } else {
+        /* No: did we previously write the same address? */
+        while (1) {
+          if (addr == w->addr) {
+            /* Yes: get value from write set (or from memory if mask was empty) */
+            value = (w->mask == 0 ? ATOMIC_LOAD(addr) : w->value);
+            break;
+          }
+          if (w->next == NULL) {
+            /* No: get value from memory */
+            value = ATOMIC_LOAD(addr);
+            break;
+          }
+          w = w->next;
+        }
+      }
+# if CM == CM_MODULAR
+      if (GET_STATUS(tx->status) == TX_KILLED) {
+        stm_rollback(tx, STM_ABORT_KILLED);
+        return 0;
+      }
+# endif
+      /* No need to add to read set (will remain valid) */
+      return value;
+    }
+    /* Conflict: CM kicks in */
+    t = w->tx->status;
+    l2 = ATOMIC_LOAD_ACQ(lock);
+    if (l != l2) {
+      l = l2;
+      goto restart_no_load;
+    }
+    if (t != w->tx->status) {
+      /* Transaction status has changed: restart the whole procedure */
+      goto restart;
+    }
+    if (GET_STATUS(t) == TX_KILLED) {
+      /* We can safely steal lock */
+      decision = KILL_OTHER;
+    } else {
+      decision =
+# ifdef IRREVOCABLE_ENABLED
+        GET_STATUS(tx->status) == TX_IRREVOCABLE ? KILL_OTHER :
+        GET_STATUS(t) == TX_IRREVOCABLE ? KILL_SELF :
+# endif /* IRREVOCABLE_ENABLED */
+        GET_STATUS(tx->status) == TX_KILLED ? KILL_SELF :
+        (contention_manager != NULL ? contention_manager(tx, w->tx, (LOCK_GET_WRITE(l) ? WR_CONFLICT : RR_CONFLICT)) : KILL_SELF);
+      if (decision == KILL_OTHER) {
+        /* Kill other */
+        if (!stm_kill(tx, w->tx, t)) {
+          /* Transaction may have committed or aborted: retry */
+          goto restart;
+        }
+      }
+    }
+    if (decision == KILL_OTHER) {
+      version = w->version;
+      goto acquire;
+    }
+    /* Kill self */
+    if ((decision & DELAY_RESTART) != 0)
+      tx->c_lock = lock;
+    /* Abort */
+# ifdef INTERNAL_STATS
+    tx->aborts_locked_read++;
+# endif /* INTERNAL_STATS */
+# ifdef CONFLICT_TRACKING
+    if (conflict_cb != NULL && l != LOCK_UNIT) {
+      /* Call conflict callback */
+      stm_tx_t *other = ((w_entry_t *)LOCK_GET_ADDR(l))->tx;
+      conflict_cb(tx, other);
+    }
+# endif /* CONFLICT_TRACKING */
+    stm_rollback(tx, (LOCK_GET_WRITE(l) ? STM_ABORT_WR_CONFLICT : STM_ABORT_RR_CONFLICT));
+    return 0;
+  }
+  /* Not locked */
+  version = LOCK_GET_TIMESTAMP(l);
+ acquire:
+  /* Acquire lock (ETL) */
+  if (tx->w_set.nb_entries == tx->w_set.size)
+    stm_allocate_ws_entries(tx, 1);
+  w = &tx->w_set.entries[tx->w_set.nb_entries];
+  w->version = version;
+  value = ATOMIC_LOAD(addr);
+  if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR_READ((stm_word_t)w)) == 0)
+    goto restart;
+  /* Add entry to write set */
+  w->addr = addr;
+  w->mask = 0;
+  w->lock = lock;
+  w->value = value;
+  w->next = NULL;
+  tx->w_set.nb_entries++;
+  return value;
+}
+#endif /* CM == CM_MODULAR */
 
 /*
  * Store a word-sized value (return write set entry or NULL).
@@ -982,21 +1745,32 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
 #elif DESIGN == WRITE_THROUGH
   int duplicate = 0;
 #endif /* DESIGN == WRITE_THROUGH */
+#if CM == CM_MODULAR
+  int decision;
+  stm_word_t l2, t;
+#endif /* CM == CM_MODULAR */
 
   PRINT_DEBUG2("==> stm_write(t=%p[%lu-%lu],a=%p,d=%p-%lu,m=0x%lx)\n",
                tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, (void *)value, (unsigned long)value, (unsigned long)mask);
 
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
+#if CM == CM_MODULAR
+  if (GET_STATUS(tx->status) == TX_KILLED) {
+    stm_rollback(tx, STM_ABORT_KILLED);
+    return NULL;
+  }
+#else /* CM != CM_MODULAR */
+  assert(IS_ACTIVE(tx->status));
+#endif /* CM != CM_MODULAR */
 
   if (tx->ro) {
     /* Disable read-only and abort */
     assert(tx->attr != NULL);
-    tx->attr->ro = 0;
+    /* Update attributes to inform the caller */
+    tx->attr->read_only = 0;
 #ifdef INTERNAL_STATS
     tx->aborts_ro++;
 #endif /* INTERNAL_STATS */
-    stm_rollback(tx);
+    stm_rollback(tx, STM_ABORT_RO_WRITE);
     return NULL;
   }
 
@@ -1009,6 +1783,10 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
  restart_no_load:
   if (LOCK_GET_OWNED(l)) {
     /* Locked */
+    if (l == LOCK_UNIT) {
+      /* Data modified by a unit store: should not last long => retry */
+      goto restart;
+    }
     /* Do we own the lock? */
 #if DESIGN == WRITE_THROUGH
     if (tx == (stm_tx_t *)LOCK_GET_ADDR(l)) {
@@ -1027,8 +1805,6 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
             w->mask = mask;
           }
           /* Yes: only write to memory */
-          PRINT_DEBUG2("==> stm_write(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu,m=0x%lx)\n",
-                       tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value, (unsigned long)mask);
           if (mask != ~(stm_word_t)0)
             value = (ATOMIC_LOAD(addr) & ~mask) | (value & mask);
           ATOMIC_STORE(addr, value);
@@ -1046,15 +1822,26 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
     /* Simply check if address falls inside our write set (avoids non-faulting load) */
     if (tx->w_set.entries <= w && w < tx->w_set.entries + tx->w_set.nb_entries) {
       /* Yes */
+#if CM == CM_MODULAR
+      /* If read-locked: upgrade lock */
+      if (!LOCK_GET_WRITE(l)) {
+        if (ATOMIC_CAS_FULL(lock, l, LOCK_UPGRADE(l)) == 0) {
+          /* Lock must have been stolen: abort */
+          stm_rollback(tx, STM_ABORT_KILLED);
+          return NULL;
+        }
+        tx->w_set.has_writes++;
+      }
+#endif /* CM == CM_MODULAR */
+      if (mask == 0) {
+        /* No need to insert new entry or modify existing one */
+        return w;
+      }
       prev = w;
       /* Did we previously write the same address? */
       while (1) {
         if (addr == prev->addr) {
-          if (mask == 0)
-            return prev;
           /* No need to add to write set */
-          PRINT_DEBUG2("==> stm_write(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu,m=0x%lx)\n",
-                       tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value, (unsigned long)mask);
           if (mask != ~(stm_word_t)0) {
             if (prev->mask == 0)
               prev->value = ATOMIC_LOAD(addr);
@@ -1073,166 +1860,138 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
       /* Get version from previous write set entry (all entries in linked list have same version) */
       version = prev->version;
       /* Must add to write set */
-      if (tx->w_set.nb_entries == tx->w_set.size) {
-        /* Extend write set (invalidate pointers to write set entries => abort and reallocate) */
-        tx->w_set.size *= 2;
-        tx->w_set.reallocate = 1;
-# ifdef INTERNAL_STATS
-        tx->aborts_reallocate++;
-# endif /* INTERNAL_STATS */
-        stm_rollback(tx);
-        return NULL;
-      }
+      if (tx->w_set.nb_entries == tx->w_set.size)
+        stm_allocate_ws_entries(tx, 1);
       w = &tx->w_set.entries[tx->w_set.nb_entries];
-# ifdef READ_LOCKED_DATA
+# if CM == CM_MODULAR
       w->version = version;
-# endif /* READ_LOCKED_DATA */
+# endif /* CM == CM_MODULAR */
       goto do_write;
     }
-#elif DESIGN == WRITE_BACK_CTL
+#endif /* DESIGN == WRITE_BACK_ETL */
+#if DESIGN == WRITE_BACK_CTL
     /* Spin while locked (should not last long) */
     goto restart;
-#endif /* DESIGN == WRITE_BACK_CTL */
+#else /* DESIGN != WRITE_BACK_CTL */
     /* Conflict: CM kicks in */
-#if CM == CM_PRIORITY
-    if (tx->retries >= cm_threshold) {
-      if (LOCK_GET_PRIORITY(l) < tx->priority ||
-          (LOCK_GET_PRIORITY(l) == tx->priority &&
-# if DESIGN == WRITE_BACK_ETL
-           l < (stm_word_t)tx->w_set.entries
-# else /* DESIGN != WRITE_BACK_ETL */
-           l < (stm_word_t)tx
-# endif /* DESIGN != WRITE_BACK_ETL */
-           && !LOCK_GET_WAIT(l))) {
-        /* We have higher priority */
-        if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_PRIORITY_WAIT(l, tx->priority)) == 0)
-          goto restart;
-        l = LOCK_SET_PRIORITY_WAIT(l, tx->priority);
-      }
-      /* Wait until lock is free or another transaction waits for one of our locks */
-      while (1) {
-        int nb;
-        stm_word_t lw;
-
-        w = tx->w_set.entries;
-        for (nb = tx->w_set.nb_entries; nb > 0; nb--, w++) {
-          lw = ATOMIC_LOAD(w->lock);
-          if (LOCK_GET_WAIT(lw)) {
-            /* Another transaction waits for one of our locks */
-            goto give_up;
-          }
-        }
-        /* Did the lock we are waiting for get updated? */
-        lw = ATOMIC_LOAD(lock);
-        if (l != lw) {
-          l = lw;
-          goto restart_no_load;
-        }
-      }
-    give_up:
-      if (tx->priority < PRIORITY_MAX) {
-        tx->priority++;
-      } else {
-        PRINT_DEBUG("Reached maximum priority\n");
-      }
-      tx->c_lock = lock;
+# if CM != CM_MODULAR && defined(IRREVOCABLE_ENABLED)
+    if (tx->irrevocable) {
+      /* Spin while locked */
+      goto restart;
     }
-#elif CM == CM_DELAY
+# endif /* CM != CM_MODULAR && defined(IRREVOCABLE_ENABLED) */
+# if CM == CM_MODULAR
+    t = w->tx->status;
+    l2 = ATOMIC_LOAD_ACQ(lock);
+    if (l != l2) {
+      l = l2;
+      goto restart_no_load;
+    }
+    if (t != w->tx->status) {
+      /* Transaction status has changed: restart the whole procedure */
+      goto restart;
+    }
+    if (GET_STATUS(t) == TX_KILLED) {
+      /* We can safely steal lock */
+      decision = KILL_OTHER;
+    } else {
+      decision =
+# ifdef IRREVOCABLE_ENABLED
+        GET_STATUS(tx->status) == TX_IRREVOCABLE ? KILL_OTHER :
+        GET_STATUS(t) == TX_IRREVOCABLE ? KILL_SELF :
+# endif /* IRREVOCABLE_ENABLED */
+        GET_STATUS(tx->status) == TX_KILLED ? KILL_SELF :
+        (contention_manager != NULL ? contention_manager(tx, w->tx, WW_CONFLICT) : KILL_SELF);
+      if (decision == KILL_OTHER) {
+        /* Kill other */
+        if (!stm_kill(tx, w->tx, t)) {
+          /* Transaction may have committed or aborted: retry */
+          goto restart;
+        }
+      }
+    }
+    if (decision == KILL_OTHER) {
+      /* Handle write after reads (before CAS) */
+      version = w->version;
+      goto acquire;
+    }
+    /* Kill self */
+    if ((decision & DELAY_RESTART) != 0)
+      tx->c_lock = lock;
+# elif CM == CM_DELAY
     tx->c_lock = lock;
-#endif /* CM == CM_DELAY */
+# endif /* CM == CM_DELAY */
     /* Abort */
-#ifdef INTERNAL_STATS
+# ifdef INTERNAL_STATS
     tx->aborts_locked_write++;
-#endif /* INTERNAL_STATS */
-#ifdef CONFLICT_TRACKING
+# endif /* INTERNAL_STATS */
+# ifdef CONFLICT_TRACKING
     if (conflict_cb != NULL && l != LOCK_UNIT) {
       /* Call conflict callback */
-# if DESIGN == WRITE_THROUGH
+#  if DESIGN == WRITE_THROUGH
       stm_tx_t *other = (stm_tx_t *)LOCK_GET_ADDR(l);
-# else /* DESIGN != WRITE_THROUGH */
+#  else /* DESIGN != WRITE_THROUGH */
       stm_tx_t *other = ((w_entry_t *)LOCK_GET_ADDR(l))->tx;
-# endif /* DESIGN != WRITE_THROUGH */
+#  endif /* DESIGN != WRITE_THROUGH */
       conflict_cb(tx, other);
     }
-#endif /* CONFLICT_TRACKING */
-    stm_rollback(tx);
+# endif /* CONFLICT_TRACKING */
+    stm_rollback(tx, STM_ABORT_WW_CONFLICT);
     return NULL;
-  } else {
-    /* Not locked */
-#if DESIGN == WRITE_BACK_CTL
-    w = stm_has_written(tx, addr);
-    if (w != NULL) {
-      w->value = (w->value & ~mask) | (value & mask);
-      w->mask |= mask;
-      return w;
-    }
-#endif /* DESIGN == WRITE_BACK_CTL */
-    /* Handle write after reads (before CAS) */
-    version = LOCK_GET_TIMESTAMP(l);
-#if DESIGN == WRITE_THROUGH && defined(ROLLOVER_CLOCK)
-    if (version == VERSION_MAX) {
-      /* Cannot acquire lock on address with version VERSION_MAX: abort */
-# ifdef INTERNAL_STATS
-      tx->aborts_rollover++;
-# endif /* INTERNAL_STATS */
-      stm_rollback(tx);
-      return NULL;
-    }
-#endif /* DESIGN == WRITE_THROUGH && defined(ROLLOVER_CLOCK) */
-    if (version > tx->end) {
-      /* We might have read an older version previously */
-      if (!tx->can_extend || stm_has_read(tx, lock) != NULL) {
-        /* Read version must be older (otherwise, tx->end >= version) */
-        /* Not much we can do: abort */
-#if CM == CM_PRIORITY
-        /* Abort caused by invisible reads */
-        tx->visible_reads++;
-#endif /* CM == CM_PRIORITY */
-#ifdef INTERNAL_STATS
-        tx->aborts_validate_write++;
-#endif /* INTERNAL_STATS */
-        stm_rollback(tx);
-        return NULL;
-      }
-    }
-    /* Acquire lock (ETL) */
-#if DESIGN == WRITE_THROUGH
-# if CM == CM_PRIORITY
-    if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR((stm_word_t)tx, tx->priority)) == 0)
-      goto restart;
-# else /* CM != CM_PRIORITY */
-    if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR((stm_word_t)tx)) == 0)
-      goto restart;
-# endif /* CM != CM_PRIORITY */
-#elif DESIGN == WRITE_BACK_ETL
-    if (tx->w_set.nb_entries == tx->w_set.size) {
-      /* Extend write set (invalidate pointers to write set entries => abort and reallocate) */
-      tx->w_set.size *= 2;
-      tx->w_set.reallocate = 1;
-# ifdef INTERNAL_STATS
-      tx->aborts_reallocate++;
-# endif /* INTERNAL_STATS */
-      stm_rollback(tx);
-      return NULL;
-    }
-    w = &tx->w_set.entries[tx->w_set.nb_entries];
-# ifdef READ_LOCKED_DATA
-    w->version = version;
-# endif /* READ_LOCKED_DATA */
-# if CM == CM_PRIORITY
-    if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR((stm_word_t)w, tx->priority)) == 0)
-      goto restart;
-# else /* CM != CM_PRIORITY */
-    if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR((stm_word_t)w)) == 0)
-      goto restart;
-# endif /* CM != CM_PRIORITY */
-#endif /* DESIGN == WRITE_BACK_ETL */
+#endif /* DESIGN != WRITE_BACK_CTL */
   }
+  /* Not locked */
+#if DESIGN == WRITE_BACK_CTL
+  w = stm_has_written(tx, addr);
+  if (w != NULL) {
+    w->value = (w->value & ~mask) | (value & mask);
+    w->mask |= mask;
+    return w;
+  }
+#endif /* DESIGN == WRITE_BACK_CTL */
+  /* Handle write after reads (before CAS) */
+  version = LOCK_GET_TIMESTAMP(l);
+#ifdef IRREVOCABLE_ENABLED
+  /* In irrevocable mode, no need to revalidate */
+  if (tx->irrevocable)
+    goto acquire_no_check;
+#endif /* IRREVOCABLE_ENABLED */
+ acquire:
+  if (version > tx->end) {
+    /* We might have read an older version previously */
+    if (!tx->can_extend || stm_has_read(tx, lock) != NULL) {
+      /* Read version must be older (otherwise, tx->end >= version) */
+      /* Not much we can do: abort */
+#if CM == CM_MODULAR
+      /* Abort caused by invisible reads */
+      tx->visible_reads++;
+#endif /* CM == CM_MODULAR */
+#ifdef INTERNAL_STATS
+      tx->aborts_validate_write++;
+#endif /* INTERNAL_STATS */
+      stm_rollback(tx, STM_ABORT_VAL_WRITE);
+      return NULL;
+    }
+  }
+  /* Acquire lock (ETL) */
+#ifdef IRREVOCABLE_ENABLED
+ acquire_no_check:
+#endif /* IRREVOCABLE_ENABLED */
+#if DESIGN == WRITE_THROUGH
+  if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR_WRITE((stm_word_t)tx)) == 0)
+    goto restart;
+#elif DESIGN == WRITE_BACK_ETL
+  if (tx->w_set.nb_entries == tx->w_set.size)
+    stm_allocate_ws_entries(tx, 1);
+  w = &tx->w_set.entries[tx->w_set.nb_entries];
+# if CM == CM_MODULAR
+  w->version = version;
+# endif /* if CM == CM_MODULAR */
+  if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_ADDR_WRITE((stm_word_t)w)) == 0)
+    goto restart;
+#endif /* DESIGN == WRITE_BACK_ETL */
   /* We own the lock here (ETL) */
 do_write:
-  PRINT_DEBUG2("==> stm_write(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu,m=0x%lx)\n",
-               tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value, (unsigned long)mask);
-
   /* Add address to write set */
 #if DESIGN != WRITE_BACK_ETL
   if (tx->w_set.nb_entries == tx->w_set.size)
@@ -1256,11 +2015,11 @@ do_write:
   /* We store the old value of the lock (timestamp and incarnation) */
   w->version = l;
   w->no_drop = duplicate;
-  if (mask == 0)
-    return w;
-  if (mask != ~(stm_word_t)0)
-    value = (w->value & ~mask) | (value & mask);
-  ATOMIC_STORE(addr, value);
+  if (mask != 0) {
+    if (mask != ~(stm_word_t)0)
+      value = (w->value & ~mask) | (value & mask);
+    ATOMIC_STORE(addr, value);
+  }
 #elif DESIGN == WRITE_BACK_ETL
   {
     /* Remember new value */
@@ -1268,15 +2027,16 @@ do_write:
       value = (ATOMIC_LOAD(addr) & ~mask) | (value & mask);
     w->value = value;
   }
-# ifndef READ_LOCKED_DATA
+# if CM != CM_MODULAR
   w->version = version;
-# endif /* ! READ_LOCKED_DATA */
+# endif /* CM != CM_MODULAR */
   w->next = NULL;
   if (prev != NULL) {
     /* Link new entry in list */
     prev->next = w;
   }
   tx->w_set.nb_entries++;
+  tx->w_set.has_writes++;
 #else /* DESIGN == WRITE_BACK_CTL */
   {
     /* Remember new value */
@@ -1290,6 +2050,13 @@ do_write:
   tx->w_set.bloom |= FILTER_BITS(addr) ;
 # endif /* USE_BLOOM_FILTER */
 #endif /* DESIGN == WRITE_BACK_CTL */
+
+#ifdef IRREVOCABLE_ENABLED
+  if (!tx->irrevocable && ATOMIC_LOAD_ACQ(&irrevocable)) {
+    stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+    return NULL;
+  }
+#endif /* IRREVOCABLE_ENABLED */
 
   return w;
 }
@@ -1324,16 +2091,20 @@ static inline int stm_unit_write(volatile stm_word_t *addr, stm_word_t value, st
     *timestamp = LOCK_GET_TIMESTAMP(l);
     return 0;
   }
-  /* TODO: need to store thread ID to be able to kill it (for wait freedom) */
+  /* TODO: would need to store thread ID to be able to kill it (for wait freedom) */
   if (ATOMIC_CAS_FULL(lock, l, LOCK_UNIT) == 0)
     goto restart;
   ATOMIC_STORE(addr, value);
-  /* Update timestamp with newer (more recent) value */
+  /* Update timestamp with newer value (may exceed VERSION_MAX by up to MAX_THREADS) */
   l = FETCH_INC_CLOCK + 1;
   if (timestamp != NULL)
     *timestamp = l;
   /* Make sure that lock release becomes visible */
   ATOMIC_STORE_REL(lock, LOCK_SET_TIMESTAMP(l));
+  if (l >= VERSION_MAX) {
+    /* Block all transactions and reset clock (current thread is not in active transaction) */
+    stm_quiesce_barrier(NULL, rollover_clock, NULL);
+  }
   return 1;
 }
 
@@ -1347,7 +2118,7 @@ static void signal_catcher(int sig)
   /* A fault might only occur upon a load concurrent with a free (read-after-free) */
   PRINT_DEBUG("Caught signal: %d\n", sig);
 
-  if (tx == NULL || tx->jmp == NULL) {
+  if (tx == NULL || (tx->attr != NULL && tx->attr->no_retry)) {
     /* There is not much we can do: execution will restart at faulty load */
     fprintf(stderr, "Error: invalid memory accessed and no longjmp destination\n");
     exit(1);
@@ -1357,7 +2128,7 @@ static void signal_catcher(int sig)
   tx->aborts_invalid_memory++;
 #endif /* INTERNAL_STATS */
   /* Will cause a longjmp */
-  stm_rollback(tx);
+  stm_rollback(tx, STM_ABORT_SIGNAL);
 }
 
 /* ################################################################### *
@@ -1369,12 +2140,17 @@ static void signal_catcher(int sig)
  */
 void stm_init()
 {
-#if CM == CM_PRIORITY
+#if CM == CM_MODULAR
   char *s;
-#endif /* CM == CM_PRIORITY */
+#endif /* CM == CM_MODULAR */
+#ifndef EPOCH_GC
   struct sigaction act;
+#endif /* ! EPOCH_GC */
 
   PRINT_DEBUG("==> stm_init()\n");
+
+  if (initialized)
+    return;
 
   PRINT_DEBUG("\tsizeof(word)=%d\n", (int)sizeof(stm_word_t));
 
@@ -1382,9 +2158,6 @@ void stm_init()
 
   COMPILE_TIME_ASSERT(sizeof(stm_word_t) == sizeof(void *));
   COMPILE_TIME_ASSERT(sizeof(stm_word_t) == sizeof(atomic_t));
-#if DESIGN == WRITE_BACK_ETL && CM == CM_PRIORITY
-  COMPILE_TIME_ASSERT((sizeof(w_entry_t) & ALIGNMENT_MASK) == 0); /* Multiple of ALIGNMENT */
-#endif /* DESIGN == WRITE_BACK_ETL && CM == CM_PRIORITY */
 
 #ifdef EPOCH_GC
   gc_init(stm_get_clock);
@@ -1392,34 +2165,17 @@ void stm_init()
 
   memset((void *)locks, 0, LOCK_ARRAY_SIZE * sizeof(stm_word_t));
 
-#if CM == CM_PRIORITY
+#if CM == CM_MODULAR
   s = getenv(VR_THRESHOLD);
   if (s != NULL)
     vr_threshold = (int)strtol(s, NULL, 10);
   else
     vr_threshold = VR_THRESHOLD_DEFAULT;
   PRINT_DEBUG("\tVR_THRESHOLD=%d\n", vr_threshold);
-  s = getenv(CM_THRESHOLD);
-  if (s != NULL)
-    cm_threshold = (int)strtol(s, NULL, 10);
-  else
-    cm_threshold = CM_THRESHOLD_DEFAULT;
-  PRINT_DEBUG("\tCM_THRESHOLD=%d\n", cm_threshold);
-#endif /* CM == CM_PRIORITY */
+#endif /* CM == CM_MODULAR */
 
   CLOCK = 0;
-#ifdef ROLLOVER_CLOCK
-  if (pthread_mutex_init(&tx_count_mutex, NULL) != 0) {
-    fprintf(stderr, "Error creating mutex\n");
-    exit(1);
-  }
-  if (pthread_cond_init(&tx_reset, NULL) != 0) {
-    fprintf(stderr, "Error creating condition variable\n");
-    exit(1);
-  }
-  tx_count = 0;
-  tx_overflow = 0;
-#endif /* ROLLOVER_CLOCK */
+  stm_quiesce_init();
 
 #ifndef TLS
   if (pthread_key_create(&thread_tx, NULL) != 0) {
@@ -1428,14 +2184,19 @@ void stm_init()
   }
 #endif /* ! TLS */
 
-  /* Catch signals for non-faulting load */
-  act.sa_handler = signal_catcher;
-  act.sa_flags = 0;
-  sigemptyset(&act.sa_mask);
-  if (sigaction(SIGBUS, &act, NULL) < 0 || sigaction(SIGSEGV, &act, NULL) < 0) {
-    perror("sigaction");
-    exit(1);
+#ifndef EPOCH_GC
+  if (getenv(NO_SIGNAL_HANDLER) == NULL) {
+    /* Catch signals for non-faulting load */
+    act.sa_handler = signal_catcher;
+    act.sa_flags = 0;
+    sigemptyset(&act.sa_mask);
+    if (sigaction(SIGBUS, &act, NULL) < 0 || sigaction(SIGSEGV, &act, NULL) < 0) {
+      perror("sigaction");
+      exit(1);
+    }
   }
+#endif /* ! EPOCH_GC */
+  initialized = 1;
 }
 
 /*
@@ -1448,10 +2209,7 @@ void stm_exit()
 #ifndef TLS
   pthread_key_delete(thread_tx);
 #endif /* ! TLS */
-#ifdef ROLLOVER_CLOCK
-  pthread_cond_destroy(&tx_reset);
-  pthread_mutex_destroy(&tx_count_mutex);
-#endif /* ROLLOVER_CLOCK */
+  stm_quiesce_exit();
 
 #ifdef EPOCH_GC
   gc_exit();
@@ -1467,22 +2225,18 @@ TXTYPE stm_init_thread()
 
   PRINT_DEBUG("==> stm_init_thread()\n");
 
+  if ((tx = stm_get_tx()) != NULL)
+    TX_RETURN;
+
 #ifdef EPOCH_GC
   gc_init_thread();
 #endif /* EPOCH_GC */
 
   /* Allocate descriptor */
-#if CM == CM_PRIORITY && DESIGN != WRITE_BACK_ETL
-  if (posix_memalign((void **)&tx, ALIGNMENT, sizeof(stm_tx_t)) != 0) {
-    fprintf(stderr, "Error: cannot allocate aligned memory\n");
-    exit(1);
-  }
-#else /* CM != CM_PRIORITY || DESIGN == WRITE_BACK_ETL */
   if ((tx = (stm_tx_t *)malloc(sizeof(stm_tx_t))) == NULL) {
-    perror("malloc");
+    perror("malloc tx");
     exit(1);
   }
-#endif /* CM != CM_PRIORITY || DESIGN == WRITE_BACK_ETL */
   /* Set status (no need for CAS or atomic op) */
   tx->status = TX_IDLE;
   /* Read set */
@@ -1492,9 +2246,7 @@ TXTYPE stm_init_thread()
   /* Write set */
   tx->w_set.nb_entries = 0;
   tx->w_set.size = RW_SET_SIZE;
-#if DESIGN == WRITE_BACK_ETL
-  tx->w_set.reallocate = 0;
-#elif DESIGN == WRITE_BACK_CTL
+#if DESIGN == WRITE_BACK_CTL
   tx->w_set.nb_acquired = 0;
 # ifdef USE_BLOOM_FILTER
   tx->w_set.bloom = 0;
@@ -1505,34 +2257,31 @@ TXTYPE stm_init_thread()
   tx->nesting = 0;
   /* Transaction-specific data */
   memset(tx->data, 0, MAX_SPECIFIC * sizeof(void *));
-#ifdef READ_LOCKED_DATA
-  /* Instance number */
-  tx->id = 0;
-#endif /* READ_LOCKED_DATA */
 #ifdef CONFLICT_TRACKING
   /* Thread identifier */
   tx->thread_id = pthread_self();
 #endif /* CONFLICT_TRACKING */
-#if CM == CM_DELAY || CM == CM_PRIORITY
+#if CM == CM_DELAY || CM == CM_MODULAR
   /* Contented lock */
   tx->c_lock = NULL;
-#endif /* CM == CM_DELAY || CM == CM_PRIORITY */
+#endif /* CM == CM_DELAY || CM == CM_MODULAR */
 #if CM == CM_BACKOFF
   /* Backoff */
   tx->backoff = MIN_BACKOFF;
   tx->seed = 123456789UL;
 #endif /* CM == CM_BACKOFF */
-#if CM == CM_PRIORITY
-  /* Priority */
-  tx->priority = 0;
+#if CM == CM_MODULAR
   tx->visible_reads = 0;
-#endif /* CM == CM_PRIORITY */
-#if CM == CM_PRIORITY || defined(INTERNAL_STATS)
+  tx->timestamp = 0;
+#endif /* CM == CM_MODULAR */
+#if CM == CM_MODULAR || defined(INTERNAL_STATS)
   tx->retries = 0;
-#endif /* CM == CM_PRIORITY || defined(INTERNAL_STATS) */
+#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) */
 #ifdef INTERNAL_STATS
   /* Statistics */
   tx->aborts = 0;
+  tx->aborts_1 = 0;
+  tx->aborts_2 = 0;
   tx->aborts_ro = 0;
   tx->aborts_locked_read = 0;
   tx->aborts_locked_write = 0;
@@ -1540,12 +2289,9 @@ TXTYPE stm_init_thread()
   tx->aborts_validate_write = 0;
   tx->aborts_validate_commit = 0;
   tx->aborts_invalid_memory = 0;
-# if DESIGN == WRITE_BACK_ETL
-  tx->aborts_reallocate = 0;
-# endif /* DESIGN == WRITE_BACK_ETL */
-# ifdef ROLLOVER_CLOCK
-  tx->aborts_rollover = 0;
-# endif /* ROLLOVER_CLOCK */
+# if CM == CM_MODULAR
+  tx->aborts_killed = 0;
+# endif /* CM == CM_MODULAR */
 # ifdef READ_LOCKED_DATA
   tx->locked_reads_ok = 0;
   tx->locked_reads_failed = 0;
@@ -1558,9 +2304,7 @@ TXTYPE stm_init_thread()
 #else /* ! TLS */
   pthread_setspecific(thread_tx, tx);
 #endif /* ! TLS */
-#ifdef ROLLOVER_CLOCK
-  stm_rollover_enter(tx);
-#endif /* ROLLOVER_CLOCK */
+  stm_quiesce_enter_thread(tx);
 
   /* Callbacks */
   if (nb_init_cb != 0) {
@@ -1568,8 +2312,6 @@ TXTYPE stm_init_thread()
     for (cb = 0; cb < nb_init_cb; cb++)
       init_cb[cb].f(TXARGS init_cb[cb].arg);
   }
-
-  PRINT_DEBUG("==> %p\n", tx);
 
   TX_RETURN;
 }
@@ -1593,9 +2335,7 @@ void stm_exit_thread(TXPARAM)
       exit_cb[cb].f(TXARGS exit_cb[cb].arg);
   }
 
-#ifdef ROLLOVER_CLOCK
-  stm_rollover_exit(tx);
-#endif /* ROLLOVER_CLOCK */
+  stm_quiesce_exit_thread(tx);
 
 #ifdef EPOCH_GC
   t = GET_CLOCK;
@@ -1608,12 +2348,18 @@ void stm_exit_thread(TXPARAM)
   free(tx->w_set.entries);
   free(tx);
 #endif /* ! EPOCH_GC */
+
+#ifdef TLS
+  thread_tx = NULL;
+#else /* ! TLS */
+  pthread_setspecific(thread_tx, NULL);
+#endif /* ! TLS */
 }
 
 /*
  * Called by the CURRENT thread to start a transaction.
  */
-void stm_start(TXPARAMS sigjmp_buf *env, stm_tx_attr_t *attr)
+sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr)
 {
   TX_GET;
 
@@ -1621,57 +2367,17 @@ void stm_start(TXPARAMS sigjmp_buf *env, stm_tx_attr_t *attr)
 
   /* Increment nesting level */
   if (tx->nesting++ > 0)
-    return;
+    return NULL;
 
-  /* Use setjmp/longjmp? */
-  tx->jmp = env;
   /* Attributes */
   tx->attr = attr;
-#if CM == CM_PRIORITY
-  if (attr != NULL && attr->ro && tx->visible_reads >= vr_threshold && vr_threshold >= 0) {
-    /* Disable read-only */
-    attr->ro = 0;
-  }
-#endif /* CM == CM_PRIORITY */
-  tx->ro = (attr == NULL ? 0 : attr->ro);
-  /* Set status (no need for CAS or atomic op) */
-  tx->status = TX_ACTIVE;
- start:
-  /* Start timestamp */
-  tx->start = tx->end = GET_CLOCK; /* OPT: Could be delayed until first read/write */
-  /* Allow extensions */
-  tx->can_extend = 1;
-#ifdef ROLLOVER_CLOCK
-  if (tx->start >= VERSION_MAX) {
-    /* Overflow: we must reset clock */
-    stm_overflow(tx);
-    goto start;
-  }
-#endif /* ROLLOVER_CLOCK */
-  /* Read/write set */
-#if DESIGN == WRITE_BACK_ETL
-  if (tx->w_set.reallocate) {
-    /* Don't need to copy the content from the previous write set */
-# ifdef EPOCH_GC
-    gc_free(tx->w_set.entries, tx->start);
-# else /* ! EPOCH_GC */
-    free(tx->w_set.entries);
-# endif /* ! EPOCH_GC */
-    stm_allocate_ws_entries(tx, 0);
-    tx->w_set.reallocate = 0;
-  }
-#elif DESIGN == WRITE_BACK_CTL
-  tx->w_set.nb_acquired = 0;
-# ifdef USE_BLOOM_FILTER
-  tx->w_set.bloom = 0;
-# endif /* USE_BLOOM_FILTER */
-#endif /* DESIGN == WRITE_BACK_CTL */
-  tx->w_set.nb_entries = 0;
-  tx->r_set.nb_entries = 0;
+  tx->ro = (attr == NULL ? 0 : attr->read_only);
+#ifdef IRREVOCABLE_ENABLED
+  tx->irrevocable = 0;
+#endif /* IRREVOCABLE_ENABLED */
 
-#ifdef EPOCH_GC
-  gc_set_epoch(tx->start);
-#endif /* EPOCH_GC */
+  /* Initialize transaction descriptor */
+  stm_prepare(tx);
 
   /* Callbacks */
   if (nb_start_cb != 0) {
@@ -1679,6 +2385,8 @@ void stm_start(TXPARAMS sigjmp_buf *env, stm_tx_attr_t *attr)
     for (cb = 0; cb < nb_start_cb; cb++)
       start_cb[cb].f(TXARGS start_cb[cb].arg);
   }
+
+  return &tx->env;
 }
 
 /*
@@ -1692,158 +2400,171 @@ int stm_commit(TXPARAM)
 #if DESIGN == WRITE_BACK_CTL
   stm_word_t l, value;
 #endif /* DESIGN == WRITE_BACK_CTL */
-#ifdef READ_LOCKED_DATA
-  stm_word_t id;
-#endif /* READ_LOCKED_DATA */
   TX_GET;
 
   PRINT_DEBUG("==> stm_commit(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
-
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
 
   /* Decrement nesting level */
   if (--tx->nesting > 0)
     return 1;
 
-  if (tx->w_set.nb_entries > 0) {
-    /* Update transaction */
+  assert(IS_ACTIVE(tx->status));
+#if CM == CM_MODULAR
+  /* Set status to COMMITTING */
+  t = tx->status;
+  if (GET_STATUS(t) == TX_KILLED || ATOMIC_CAS_FULL(&tx->status, t, t + (TX_COMMITTING - GET_STATUS(t))) == 0) {
+    /* We have been killed */
+    assert(GET_STATUS(tx->status) == TX_KILLED);
+    stm_rollback(tx, STM_ABORT_KILLED);
+    return 0;
+  }
+#endif /* CM == CM_MODULAR */
 
-#if DESIGN == WRITE_BACK_CTL
-    /* Acquire locks (in reverse order) */
-    w = tx->w_set.entries + tx->w_set.nb_entries;
-    do {
-      w--;
-      /* Try to acquire lock */
- restart:
-      l = ATOMIC_LOAD(w->lock);
-      if (LOCK_GET_OWNED(l)) {
-        /* Do we already own the lock? */
-        if (tx->w_set.entries <= (w_entry_t *)LOCK_GET_ADDR(l) && (w_entry_t *)LOCK_GET_ADDR(l) < tx->w_set.entries + tx->w_set.nb_entries) {
-          /* Yes: ignore */
-          continue;
-        }
-        /* Conflict: CM kicks in */
-# if CM == CM_DELAY
-        tx->c_lock = w->lock;
-# endif /* CM == CM_DELAY */
-        /* Abort self */
-# ifdef INTERNAL_STATS
-        tx->aborts_locked_write++;
-# endif /* INTERNAL_STATS */
-        stm_rollback(tx);
-        return 0;
-      }
-      if (ATOMIC_CAS_FULL(w->lock, l, LOCK_SET_ADDR((stm_word_t)w)) == 0)
-        goto restart;
-      /* We own the lock here */
-      w->no_drop = 0;
-      /* Store version for validation of read set */
-      w->version = LOCK_GET_TIMESTAMP(l);
-      tx->w_set.nb_acquired++;
-    } while (w > tx->w_set.entries);
-#endif /* DESIGN == WRITE_BACK_CTL */
+  /* A read-only transaction can commit immediately */
+  if (tx->w_set.nb_entries == 0)
+    goto end;
 
-    /* Get commit timestamp */
-    t = FETCH_INC_CLOCK + 1;
-    if (t >= VERSION_MAX) {
-#ifdef ROLLOVER_CLOCK
-      /* Abort: will reset the clock on next transaction start or delete */
-# ifdef INTERNAL_STATS
-      tx->aborts_rollover++;
-# endif /* INTERNAL_STATS */
-      stm_rollback(tx);
-      return 0;
-#else /* ! ROLLOVER_CLOCK */
-      fprintf(stderr, "Exceeded maximum version number: 0x%lx\n", (unsigned long)t);
-      exit(1);
-#endif /* ! ROLLOVER_CLOCK */
-    }
-
-    /* Try to validate (only if a concurrent transaction has committed since tx->start) */
-    if (tx->start != t - 1 && !stm_validate(tx)) {
-      /* Cannot commit */
-#if CM == CM_PRIORITY
-      /* Abort caused by invisible reads */
-      tx->visible_reads++;
-#endif /* CM == CM_PRIORITY */
-#ifdef INTERNAL_STATS
-      tx->aborts_validate_commit++;
-#endif /* INTERNAL_STATS */
-      stm_rollback(tx);
-      return 0;
-    }
-
-#if DESIGN == WRITE_THROUGH
-    /* Make sure that the updates become visible before releasing locks */
-    ATOMIC_MB_WRITE;
-    /* Drop locks and set new timestamp (traverse in reverse order) */
-    w = tx->w_set.entries + tx->w_set.nb_entries - 1;
-    for (i = tx->w_set.nb_entries; i > 0; i--, w--) {
-      if (w->no_drop)
-        continue;
-      /* No need for CAS (can only be modified by owner transaction) */
-      ATOMIC_STORE(w->lock, LOCK_SET_TIMESTAMP(t));
-    }
-    /* Make sure that all lock releases become visible */
-    ATOMIC_MB_WRITE;
-#elif DESIGN == WRITE_BACK_ETL
-# ifdef READ_LOCKED_DATA
-    /* Update instance number (becomes odd) */
-    id = tx->id;
-    assert(id % 2 == 0);
-    ATOMIC_STORE_REL(&tx->id, id + 1);
-# endif /* READ_LOCKED_DATA */
-    /* Install new versions, drop locks and set new timestamp */
+#if CM == CM_MODULAR
+  /* A read-only transaction with visible reads must simply drop locks */
+  if (tx->w_set.has_writes == 0) {
     w = tx->w_set.entries;
     for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
-      if (w->mask != 0)
-        ATOMIC_STORE(w->addr, w->value);
       /* Only drop lock for last covered address in write set */
       if (w->next == NULL)
-        ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
-
-      PRINT_DEBUG2("==> write(t=%p[%lu-%lu],a=%p,d=%p-%d,v=%d)\n",
-                   tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (int)w->value, (int)w->version);
+        ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(w->version));
     }
-# ifdef READ_LOCKED_DATA
-    /* Update instance number (becomes even) */
-    ATOMIC_STORE_REL(&tx->id, id + 2);
-# endif /* READ_LOCKED_DATA */
-#else /* DESIGN == WRITE_BACK_CTL */
-    /* Install new versions, drop locks and set new timestamp */
-    w = tx->w_set.entries;
-    for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
-      if (w->mask == ~(stm_word_t)0) {
-        ATOMIC_STORE(w->addr, w->value);
-      } else if (w->mask != 0) {
-        value = (ATOMIC_LOAD(w->addr) & ~w->mask) | (w->value & w->mask);
-        ATOMIC_STORE(w->addr, w->value);
+    /* Update clock so that future transactions get higher timestamp (liveness of timestamp CM) */
+    FETCH_INC_CLOCK;
+    goto end;
+  }
+#endif /* CM == CM_MODULAR */
+
+  /* Update transaction */
+#if DESIGN == WRITE_BACK_CTL
+# ifdef IRREVOCABLE_ENABLED
+  /* Verify already if there is an irrevocable transaction before acquiring locks */
+  if(!tx->irrevocable && ATOMIC_LOAD(&irrevocable)) {
+    stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+    return 0;
+  }
+# endif /* IRREVOCABLE_ENABLED */
+  /* Acquire locks (in reverse order) */
+  w = tx->w_set.entries + tx->w_set.nb_entries;
+  do {
+    w--;
+    /* Try to acquire lock */
+ restart:
+    l = ATOMIC_LOAD(w->lock);
+    if (LOCK_GET_OWNED(l)) {
+      /* Do we already own the lock? */
+      if (tx->w_set.entries <= (w_entry_t *)LOCK_GET_ADDR(l) && (w_entry_t *)LOCK_GET_ADDR(l) < tx->w_set.entries + tx->w_set.nb_entries) {
+        /* Yes: ignore */
+        continue;
       }
-      /* Only drop lock for last covered address in write set (cannot be "no drop") */
-      if (!w->no_drop)
-        ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
-
-      PRINT_DEBUG2("==> write(t=%p[%lu-%lu],a=%p,d=%p-%d,v=%d)\n",
-                   tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (int)w->value, (int)w->version);
+      /* Conflict: CM kicks in */
+# if CM == CM_DELAY
+      tx->c_lock = w->lock;
+# endif /* CM == CM_DELAY */
+      /* Abort self */
+# ifdef INTERNAL_STATS
+      tx->aborts_locked_write++;
+# endif /* INTERNAL_STATS */
+      stm_rollback(tx, STM_ABORT_WW_CONFLICT);
+      return 0;
     }
+    if (ATOMIC_CAS_FULL(w->lock, l, LOCK_SET_ADDR_WRITE((stm_word_t)w)) == 0)
+      goto restart;
+    /* We own the lock here */
+    w->no_drop = 0;
+    /* Store version for validation of read set */
+    w->version = LOCK_GET_TIMESTAMP(l);
+    tx->w_set.nb_acquired++;
+  } while (w > tx->w_set.entries);
 #endif /* DESIGN == WRITE_BACK_CTL */
+
+#ifdef IRREVOCABLE_ENABLED
+  /* Verify if there is an irrevocable transaction once all locks have been acquired */
+  if (!tx->irrevocable && ATOMIC_LOAD(&irrevocable)) {
+    stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+    return 0;
+  }
+#endif /* IRREVOCABLE_ENABLED */ 
+  /* Get commit timestamp (may exceed VERSION_MAX by up to MAX_THREADS) */
+  t = FETCH_INC_CLOCK + 1;
+#ifdef IRREVOCABLE_ENABLED
+  if (tx->irrevocable)
+    goto release_locks;
+#endif /* IRREVOCABLE_ENABLED */
+
+  /* Try to validate (only if a concurrent transaction has committed since tx->start) */
+  if (tx->start != t - 1 && !stm_validate(tx)) {
+    /* Cannot commit */
+#if CM == CM_MODULAR
+    /* Abort caused by invisible reads */
+    tx->visible_reads++;
+#endif /* CM == CM_MODULAR */
+#ifdef INTERNAL_STATS
+    tx->aborts_validate_commit++;
+#endif /* INTERNAL_STATS */
+    stm_rollback(tx, STM_ABORT_VALIDATE);
+    return 0;
   }
 
-#if CM == CM_PRIORITY || defined(INTERNAL_STATS)
+#ifdef IRREVOCABLE_ENABLED
+  release_locks:
+#endif /* IRREVOCABLE_ENABLED */
+#if DESIGN == WRITE_THROUGH
+  /* Make sure that the updates become visible before releasing locks */
+  ATOMIC_MB_WRITE;
+  /* Drop locks and set new timestamp (traverse in reverse order) */
+  w = tx->w_set.entries + tx->w_set.nb_entries - 1;
+  for (i = tx->w_set.nb_entries; i > 0; i--, w--) {
+    if (w->no_drop)
+      continue;
+    /* No need for CAS (can only be modified by owner transaction) */
+    ATOMIC_STORE(w->lock, LOCK_SET_TIMESTAMP(t));
+  }
+  /* Make sure that all lock releases become visible */
+  ATOMIC_MB_WRITE;
+#elif DESIGN == WRITE_BACK_ETL
+  /* Install new versions, drop locks and set new timestamp */
+  w = tx->w_set.entries;
+  for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
+    if (w->mask != 0)
+      ATOMIC_STORE(w->addr, w->value);
+    /* Only drop lock for last covered address in write set */
+    if (w->next == NULL)
+      ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
+  }
+#else /* DESIGN == WRITE_BACK_CTL */
+  /* Install new versions, drop locks and set new timestamp */
+  w = tx->w_set.entries;
+  for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
+    if (w->mask == ~(stm_word_t)0) {
+      ATOMIC_STORE(w->addr, w->value);
+    } else if (w->mask != 0) {
+      value = (ATOMIC_LOAD(w->addr) & ~w->mask) | (w->value & w->mask);
+      ATOMIC_STORE(w->addr, w->value);
+    }
+    /* Only drop lock for last covered address in write set (cannot be "no drop") */
+    if (!w->no_drop)
+      ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
+  }
+#endif /* DESIGN == WRITE_BACK_CTL */
+
+ end:
+#if CM == CM_MODULAR || defined(INTERNAL_STATS)
   tx->retries = 0;
-#endif /* CM == CM_PRIORITY || defined(INTERNAL_STATS) */
+#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) */
 
 #if CM == CM_BACKOFF
   /* Reset backoff */
   tx->backoff = MIN_BACKOFF;
 #endif /* CM == CM_BACKOFF */
 
-#if CM == CM_PRIORITY
-  /* Reset priority */
-  tx->priority = 0;
+#if CM == CM_MODULAR
   tx->visible_reads = 0;
-#endif /* CM == CM_PRIORITY */
+#endif /* CM == CM_MODULAR */
 
   /* Callbacks */
   if (nb_commit_cb != 0) {
@@ -1852,8 +2573,16 @@ int stm_commit(TXPARAM)
       commit_cb[cb].f(TXARGS commit_cb[cb].arg);
   }
 
-  /* Set status (no need for CAS or atomic op) */
-  tx->status = TX_COMMITTED;
+#ifdef IRREVOCABLE_ENABLED
+  if (tx->irrevocable) {
+    ATOMIC_STORE(&irrevocable, 0);
+    if ((tx->irrevocable & 0x08) != 0)
+      stm_quiesce_release(tx);
+  }
+#endif /* IRREVOCABLE_ENABLED */
+
+  /* Set status to COMMITTED */
+  SET_STATUS(tx->status, TX_COMMITTED);
 
   return 1;
 }
@@ -1861,10 +2590,10 @@ int stm_commit(TXPARAM)
 /*
  * Called by the CURRENT thread to abort a transaction.
  */
-void stm_abort(TXPARAM) 
+void stm_abort(TXPARAMS int reason)
 {
   TX_GET;
-  stm_rollback(tx);
+  stm_rollback(tx, reason | STM_ABORT_EXPLICIT);
 }
 
 /*
@@ -1872,273 +2601,21 @@ void stm_abort(TXPARAM)
  */
 stm_word_t stm_load(TXPARAMS volatile stm_word_t *addr)
 {
-  volatile stm_word_t *lock;
-  stm_word_t l, l2, value, version;
-  r_entry_t *r;
-#if CM == CM_PRIORITY || DESIGN == WRITE_BACK_ETL
-  w_entry_t *w;
-#endif /* CM == CM_PRIORITY || DESIGN == WRITE_BACK_ETL */
-#if DESIGN == WRITE_BACK_CTL
-  w_entry_t *written = NULL;
-#endif /* DESIGN == WRITE_BACK_CTL */
-#ifdef READ_LOCKED_DATA
-  stm_word_t id;
-  stm_tx_t *owner;
-#endif /* READ_LOCKED_DATA */
   TX_GET;
 
-  PRINT_DEBUG2("==> stm_load(t=%p[%lu-%lu],a=%p)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, addr);
-
-  /* Check status */
-  assert(tx->status == TX_ACTIVE);
-
-#if CM == CM_PRIORITY
-  if (tx->visible_reads >= vr_threshold && vr_threshold >= 0) {
-    /* Visible reads: acquire lock first */
-    w = stm_write(tx, addr, 0, 0);
-    /* Make sure we did not abort */
-    if(tx->status != TX_ACTIVE) {
-      return 0;
-    }
-    assert(w != NULL);
-    /* We now own the lock */
-# if DESIGN == WRITE_THROUGH
+#ifdef IRREVOCABLE_ENABLED
+  if (unlikely(((tx->irrevocable & 0x08) != 0))) {
+    /* Serial irrevocable mode: direct access to memory */
     return ATOMIC_LOAD(addr);
-# else /* DESIGN != WRITE_THROUGH */
-    return w->mask == 0 ? ATOMIC_LOAD(addr) : w->value;
-# endif /* DESIGN != WRITE_THROUGH */
   }
-#endif /* CM == CM_PRIORITY */
-
-#if DESIGN == WRITE_BACK_CTL
-  /* Did we previously write the same address? */
-  written = stm_has_written(tx, addr);
-  if (written != NULL) {
-    /* Yes: get value from write set if possible */
-    if (written->mask == ~(stm_word_t)0) {
-      value = written->value;
-      /* No need to add to read set */
-      PRINT_DEBUG2("==> stm_load(t=%p[%lu-%lu],a=%p,d=%p-%lu)\n",
-                   tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, (void *)value, (unsigned long)value);
-      return value;
-    }
+#endif /* IRREVOCABLE_ENABLED */
+#if CM == CM_MODULAR
+  if (unlikely((tx->visible_reads >= vr_threshold && vr_threshold >= 0))) {
+    /* Use visible read */
+    return stm_read_visible(tx, addr);
   }
-#endif /* DESIGN == WRITE_BACK_CTL */
-
-  /* Get reference to lock */
-  lock = GET_LOCK(addr);
-
-  /* Note: we could check for duplicate reads and get value from read set */
-
-  /* Read lock, value, lock */
- restart:
-  l = ATOMIC_LOAD_ACQ(lock);
- restart_no_load:
-  if (LOCK_GET_OWNED(l)) {
-    /* Locked */
-    /* Do we own the lock? */
-#if DESIGN == WRITE_THROUGH
-    if (tx == (stm_tx_t *)LOCK_GET_ADDR(l)) {
-      /* Yes: we have a version locked by us that was valid at write time */
-      value = ATOMIC_LOAD(addr);
-      /* No need to add to read set (will remain valid) */
-      PRINT_DEBUG2("==> stm_load(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu)\n",
-                   tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value);
-      return value;
-    }
-#elif DESIGN == WRITE_BACK_ETL
-    w = (w_entry_t *)LOCK_GET_ADDR(l);
-    /* Simply check if address falls inside our write set (avoids non-faulting load) */
-    if (tx->w_set.entries <= w && w < tx->w_set.entries + tx->w_set.nb_entries) {
-      /* Yes: did we previously write the same address? */
-      while (1) {
-        if (addr == w->addr) {
-          /* Yes: get value from write set (or from memory if mask was empty) */
-          value = (w->mask == 0 ? ATOMIC_LOAD(addr) : w->value);
-          break;
-        }
-        if (w->next == NULL) {
-          /* No: get value from memory */
-          value = ATOMIC_LOAD(addr);
-          break;
-        }
-        w = w->next;
-      }
-      /* No need to add to read set (will remain valid) */
-      PRINT_DEBUG2("==> stm_load(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu)\n",
-                   tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value);
-      return value;
-    }
-# ifdef READ_LOCKED_DATA
-    if (l == LOCK_UNIT) {
-      /* Data modified by a unit store: should not last long => retry */
-      goto restart;
-    }
-    /* Try to read old version: we can safely access write set thanks to epoch-based GC */
-    owner = w->tx;
-    id = ATOMIC_LOAD_ACQ(&owner->id);
-    /* Check that data is not being written */
-    if ((id & 0x01) != 0) {
-      /* Even identifier while address is locked: should not last long => retry */
-      goto restart;
-    }
-    /* Check that the lock did not change */
-    l2 = ATOMIC_LOAD_ACQ(lock);
-    if (l != l2) {
-      l = l2;
-      goto restart_no_load;
-    }
-    /* Read old version */
-    version =  ATOMIC_LOAD(&w->version);
-    /* Read data */
-    value = ATOMIC_LOAD(addr);
-    /* Check that data has not been written */
-    if (id != ATOMIC_LOAD_ACQ(&owner->id)) {
-      /* Data concurrently modified: a new version might be available => retry */
-      goto restart;
-    }
-    if (version >= tx->start && (version <= tx->end || (!tx->ro && tx->can_extend && stm_extend(tx)))) {
-      /* Success */
-#  ifdef INTERNAL_STATS
-      tx->locked_reads_ok++;
-#  endif /* INTERNAL_STATS */
-      goto add_to_read_set;
-    }
-    /* Invalid version: not much we can do => fail */
-#  ifdef INTERNAL_STATS
-    tx->locked_reads_failed++;
-#  endif /* INTERNAL_STATS */
-# endif /* READ_LOCKED_DATA */
-#elif DESIGN == WRITE_BACK_CTL
-    /* Spin while locked (should not last long) */
-    goto restart;
-#endif /* DESIGN == WRITE_BACK_CTL */
-    /* Conflict: CM kicks in */
-    /* TODO: we could check for duplicate reads and get value from read set (should be rare) */
-#if CM == CM_PRIORITY
-    if (tx->retries >= cm_threshold) {
-      if (LOCK_GET_PRIORITY(l) < tx->priority ||
-          (LOCK_GET_PRIORITY(l) == tx->priority &&
-# if DESIGN == WRITE_BACK_ETL
-           l < (stm_word_t)tx->w_set.entries
-# else /* DESIGN != WRITE_BACK_ETL */
-           l < (stm_word_t)tx
-# endif /* DESIGN != WRITE_BACK_ETL */
-           && !LOCK_GET_WAIT(l))) {
-        /* We have higher priority */
-        if (ATOMIC_CAS_FULL(lock, l, LOCK_SET_PRIORITY_WAIT(l, tx->priority)) == 0)
-          goto restart;
-        l = LOCK_SET_PRIORITY_WAIT(l, tx->priority);
-      }
-      /* Wait until lock is free or another transaction waits for one of our locks */
-      while (1) {
-        int nb;
-        stm_word_t lw;
-
-        w = tx->w_set.entries;
-        for (nb = tx->w_set.nb_entries; nb > 0; nb--, w++) {
-          lw = ATOMIC_LOAD(w->lock);
-          if (LOCK_GET_WAIT(lw)) {
-            /* Another transaction waits for one of our locks */
-            goto give_up;
-          }
-        }
-        /* Did the lock we are waiting for get updated? */
-        lw = ATOMIC_LOAD(lock);
-        if (l != lw) {
-          l = lw;
-          goto restart_no_load;
-        }
-      }
-    give_up:
-      if (tx->priority < PRIORITY_MAX) {
-        tx->priority++;
-      } else {
-        PRINT_DEBUG("Reached maximum priority\n");
-      }
-      tx->c_lock = lock;
-    }
-#elif CM == CM_DELAY
-    tx->c_lock = lock;
-#endif /* CM == CM_DELAY */
-    /* Abort */
-#ifdef INTERNAL_STATS
-    tx->aborts_locked_read++;
-#endif /* INTERNAL_STATS */
-#ifdef CONFLICT_TRACKING
-    if (conflict_cb != NULL && l != LOCK_UNIT) {
-      /* Call conflict callback */
-# if DESIGN == WRITE_THROUGH
-      stm_tx_t *other = (stm_tx_t *)LOCK_GET_ADDR(l);
-# else /* DESIGN != WRITE_THROUGH */
-      stm_tx_t *other = ((w_entry_t *)LOCK_GET_ADDR(l))->tx;
-# endif /* DESIGN != WRITE_THROUGH */
-      conflict_cb(tx, other);
-    }
-#endif /* CONFLICT_TRACKING */
-    stm_rollback(tx);
-    return 0;
-  } else {
-    /* Not locked */
-    value = ATOMIC_LOAD_ACQ(addr);
-    l2 = ATOMIC_LOAD_ACQ(lock);
-    if (l != l2) {
-      l = l2;
-      goto restart_no_load;
-    }
-    /* Check timestamp */
-    version = LOCK_GET_TIMESTAMP(l);
-    /* Valid version? */
-    if (version > tx->end) {
-      /* No: try to extend first (except for read-only transactions: no read set) */
-      if (tx->ro || !tx->can_extend || !stm_extend(tx)) {
-        /* Not much we can do: abort */
-#if CM == CM_PRIORITY
-        /* Abort caused by invisible reads */
-        tx->visible_reads++;
-#endif /* CM == CM_PRIORITY */
-#ifdef INTERNAL_STATS
-        tx->aborts_validate_read++;
-#endif /* INTERNAL_STATS */
-        stm_rollback(tx);
-        return 0;
-      }
-      /* Verify that version has not been overwritten (read value has not
-       * yet been added to read set and may have not been checked during
-       * extend) */
-      l = ATOMIC_LOAD_ACQ(lock);
-      if (l != l2) {
-        l = l2;
-        goto restart_no_load;
-      }
-      /* Worked: we now have a good version (version <= tx->end) */
-    }
-  }
-  /* We have a good version: add to read set (update transactions) and return value */
-
-#if DESIGN == WRITE_BACK_CTL
-  /* Did we previously write the same address? */
-  if (written != NULL) {
-    value = (value & ~written->mask) | (written->value & written->mask);
-    /* Must still add to read set */
-  }
-#endif /* DESIGN == WRITE_BACK_CTL */
-#ifdef READ_LOCKED_DATA
-add_to_read_set:
-#endif /* READ_LOCKED_DATA */
-  if (!tx->ro) {
-    /* Add address and version to read set */
-    if (tx->r_set.nb_entries == tx->r_set.size)
-      stm_allocate_rs_entries(tx, 1);
-    r = &tx->r_set.entries[tx->r_set.nb_entries++];
-    r->version = version;
-    r->lock = lock;
-  }
-
-  PRINT_DEBUG2("==> stm_load(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu,v=%lu)\n",
-               tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value, (unsigned long)version);
-
-  return value;
+#endif /* CM == CM_MODULAR */
+  return stm_read_invisible(tx, addr);
 }
 
 /*
@@ -2147,6 +2624,14 @@ add_to_read_set:
 void stm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
 {
   TX_GET;
+
+#ifdef IRREVOCABLE_ENABLED
+  if (unlikely(((tx->irrevocable & 0x08) != 0))) {
+    /* Serial irrevocable mode: direct access to memory */
+    ATOMIC_STORE(addr, value);
+    return;
+  }
+#endif /* IRREVOCABLE_ENABLED */
   stm_write(tx, addr, value, ~(stm_word_t)0);
 }
 
@@ -2156,6 +2641,17 @@ void stm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
 void stm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask)
 {
   TX_GET;
+
+#ifdef IRREVOCABLE_ENABLED
+  if (unlikely(((tx->irrevocable & 0x08) != 0))) {
+    /* Serial irrevocable mode: direct access to memory */
+    if (mask == ~(stm_word_t)0)
+      ATOMIC_STORE(addr, value);
+    else
+      ATOMIC_STORE(addr, (ATOMIC_LOAD(addr) & ~mask) | (value & mask));
+    return;
+  }
+#endif /* IRREVOCABLE_ENABLED */
   stm_write(tx, addr, value, mask);
 }
 
@@ -2166,7 +2662,7 @@ int stm_active(TXPARAM)
 {
   TX_GET;
 
-  return (tx->status == TX_ACTIVE);
+  return IS_ACTIVE(tx->status);
 }
 
 /*
@@ -2176,8 +2672,20 @@ int stm_aborted(TXPARAM)
 {
   TX_GET;
 
-  return (tx->status == TX_ABORTED);
+  return (GET_STATUS(tx->status) == TX_ABORTED);
 }
+
+# ifdef IRREVOCABLE_ENABLED
+/*
+ * Called by the CURRENT thread to inquire about the status of a transaction.
+ */
+int stm_irrevocable(TXPARAM)
+{
+  TX_GET;
+
+  return ((tx->irrevocable & 0x07) == 3);
+}
+# endif /* IRREVOCABLE_ENABLED */
 
 /*
  * Called by the CURRENT thread to obtain an environment for setjmp/longjmp.
@@ -2232,6 +2740,14 @@ int stm_get_stats(TXPARAMS const char *name, void *val)
     *(unsigned long *)val = tx->aborts;
     return 1;
   }
+  if (strcmp("nb_aborts_1", name) == 0) {
+    *(unsigned long *)val = tx->aborts_1;
+    return 1;
+  }
+  if (strcmp("nb_aborts_2", name) == 0) {
+    *(unsigned long *)val = tx->aborts_2;
+    return 1;
+  }
   if (strcmp("nb_aborts_ro", name) == 0) {
     *(unsigned long *)val = tx->aborts_ro;
     return 1;
@@ -2260,27 +2776,21 @@ int stm_get_stats(TXPARAMS const char *name, void *val)
     *(unsigned long *)val = tx->aborts_invalid_memory;
     return 1;
   }
-# if DESIGN == WRITE_BACK_ETL
-  if (strcmp("nb_aborts_reallocate", name) == 0) {
-    *(unsigned long *)val = tx->aborts_reallocate;
-    return 1;
-  } 
-# endif /* DESIGN == WRITE_BACK_ETL */
-# ifdef ROLLOVER_CLOCK
-  if (strcmp("nb_aborts_rollover", name) == 0) {
-    *(unsigned long *)val = tx->aborts_rollover;
+# if CM == CM_MODULAR
+  if (strcmp("nb_aborts_killed", name) == 0) {
+    *(unsigned long *)val = tx->aborts_killed;
     return 1;
   }
-# endif /* ROLLOVER_CLOCK */
+# endif /* CM == CM_MODULAR */
 # ifdef READ_LOCKED_DATA
   if (strcmp("locked_reads_ok", name) == 0) {
     *(unsigned long *)val = tx->locked_reads_ok;
     return 1;
-  } 
+  }
   if (strcmp("locked_reads_failed", name) == 0) {
     *(unsigned long *)val = tx->locked_reads_failed;
     return 1;
-  } 
+  }
 # endif /* READ_LOCKED_DATA */
   if (strcmp("max_retries", name) == 0) {
     *(unsigned long *)val = tx->max_retries;
@@ -2317,16 +2827,12 @@ int stm_get_parameter(const char *name, void *val)
     return 1;
   }
 #endif /* CM == CM_BACKOFF */
-#if CM == CM_PRIORITY
+#if CM == CM_MODULAR
   if (strcmp("vr_threshold", name) == 0) {
     *(int *)val = vr_threshold;
     return 1;
   }
-  if (strcmp("cm_threshold", name) == 0) {
-    *(int *)val = cm_threshold;
-    return 1;
-  }
-#endif /* CM == CM_PRIORITY */
+#endif /* CM == CM_MODULAR */
 #ifdef COMPILE_FLAGS
   if (strcmp("compile_flags", name) == 0) {
     *(const char **)val = XSTR(COMPILE_FLAGS);
@@ -2341,16 +2847,27 @@ int stm_get_parameter(const char *name, void *val)
  */
 int stm_set_parameter(const char *name, void *val)
 {
-#if CM == CM_PRIORITY
+#if CM == CM_MODULAR
+  int i;
+
+  if (strcmp("cm_policy", name) == 0) {
+    for (i = 0; cms[i].name != NULL; i++) {
+      if (strcasecmp(cms[i].name, (const char *)val) == 0) {
+        contention_manager = cms[i].f;
+        return 1;
+      }
+    }
+    return 0;
+  }
+  if (strcmp("cm_function", name) == 0) {
+    contention_manager = (int (*)(stm_tx_t *, stm_tx_t *, int))val;
+    return 1;
+  }
   if (strcmp("vr_threshold", name) == 0) {
     vr_threshold = *(int *)val;
     return 1;
   }
-  if (strcmp("cm_threshold", name) == 0) {
-    cm_threshold = *(int *)val;
-    return 1;
-  }
-#endif /* CM_PRIORITY */
+#endif /* CM == CM_MODULAR */
   return 0;
 }
 
@@ -2470,9 +2987,6 @@ stm_word_t stm_unit_load(volatile stm_word_t *addr, stm_word_t *timestamp)
   if (timestamp != NULL)
     *timestamp = LOCK_GET_TIMESTAMP(l);
 
-  PRINT_DEBUG2("==> stm_unit_load(a=%p,l=%p,*l=%lu,d=%p-%lu)\n",
-               addr, lock, (unsigned long)l, (void *)value, (unsigned long)value);
-
   return value;
 }
 
@@ -2543,3 +3057,79 @@ int stm_set_conflict_cb(void (*on_conflict)(stm_tx_t *tx1, stm_tx_t *tx2))
   return 1;
 }
 #endif /* CONFLICT_TRACKING */
+
+#ifdef IRREVOCABLE_ENABLED
+int stm_set_irrevocable(TXPARAMS int serial)
+{
+# if CM == CM_MODULAR
+  stm_word_t t;
+# endif /* CM == CM_MODULAR */
+  TX_GET;
+
+  /* Are we already in irrevocable mode? */
+  if ((tx->irrevocable & 0x07) == 3) {
+    return 1;
+  }
+
+  if (tx->irrevocable == 0) {
+    /* Acquire irrevocability for the first time */
+    tx->irrevocable = 1 + (serial ? 0x08 : 0);
+    /* Try acquiring global lock */
+    if (irrevocable == 1 || ATOMIC_CAS_FULL(&irrevocable, 0, 1) == 0) {
+      /* Transaction will acquire irrevocability after rollback */
+      stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+      return 0;
+    }
+    /* Success: remember we have the lock */
+    tx->irrevocable++;
+    /* Try validating transaction */
+    if (!stm_validate(tx)) {
+      stm_rollback(tx, STM_ABORT_VALIDATE);
+      return 0;
+    }
+# if CM == CM_MODULAR
+   /* We might still abort if we cannot set status (e.g., we are being killed) */
+    t = tx->status;
+    if (GET_STATUS(t) != TX_ACTIVE || ATOMIC_CAS_FULL(&tx->status, t, t + (TX_IRREVOCABLE - TX_ACTIVE)) == 0) {
+      stm_rollback(tx, STM_ABORT_KILLED);
+      return 0;
+    }
+# endif /* CM == CM_MODULAR */
+    if (serial && tx->w_set.nb_entries != 0) {
+      /* Don't mix transactional and direct accesses => restart with direct accesses */
+      stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+      return 0;
+    }
+  } else if ((tx->irrevocable & 0x07) == 1) {
+    /* Acquire irrevocability after restart (no need to validate) */
+    while (irrevocable == 1 || ATOMIC_CAS_FULL(&irrevocable, 0, 1) == 0)
+      ;
+    /* Success: remember we have the lock */
+    tx->irrevocable++;
+  }
+  assert((tx->irrevocable & 0x07) == 2);
+
+  /* Are we in serial irrevocable mode? */
+  if ((tx->irrevocable & 0x08) != 0) {
+    /* Stop all other threads */
+    if (stm_quiesce(tx, 1) != 0) {
+      /* Another thread is quiescing and we are active (trying to acquire irrevocability) */
+      assert(serial != -1);
+      stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+      return 0;
+    }
+  }
+
+  /* We are in irrevocable mode */
+  tx->irrevocable++;
+
+  return 1;
+}
+#else /* ! IRREVOCABLE_ENABLED */
+int stm_set_irrevocable(TXPARAMs int serial)
+{
+  fprintf(stderr, "Irrevocability is not supported in this configuration\n");
+  exit(-1);
+  return 1;
+}
+#endif /* ! IRREVOCABLE_ENABLED */

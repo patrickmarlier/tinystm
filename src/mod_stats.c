@@ -20,6 +20,7 @@
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -32,17 +33,19 @@
  * TYPES
  * ################################################################### */
 
-typedef struct tx_stats {               /* Transaction statistics */
+typedef struct mod_stats_data {         /* Transaction statistics */
   unsigned long commits;                /* Total number of commits (cumulative) */
-  unsigned long aborts;                 /* Total number of aborts (cumulative) */
-  unsigned long retries;                /* Number of consecutive aborts (retries) */
-  unsigned long max_retries;            /* Maximum number of consecutive aborts (retries) */
-} tx_stats_t;
+  unsigned long retries;                /* Number of consecutive aborts of current transaction (retries) */
+  unsigned long retries_min;            /* Minimum number of consecutive aborts */
+  unsigned long retries_max;            /* Maximum number of consecutive aborts */
+  unsigned long retries_acc;            /* Total number of aborts (cumulative) */
+  unsigned long retries_cnt;            /* Number of samples for cumulative aborts */
+} mod_stats_data_t;
 
-static int key;
-static int initialized = 0;
+static int mod_stats_key;
+static int mod_stats_initialized = 0;
 
-static tx_stats_t global_stats = { 0, 0, 0, 0 };
+static mod_stats_data_t mod_stats_global = { 0, 0, ULONG_MAX, 0, 0, 0 };
 
 /* ################################################################### *
  * FUNCTIONS
@@ -53,21 +56,21 @@ static tx_stats_t global_stats = { 0, 0, 0, 0 };
  */
 int stm_get_global_stats(const char *name, void *val)
 {
-  if (!initialized) {
+  if (!mod_stats_initialized) {
     fprintf(stderr, "Module mod_stats not initialized\n");
     exit(1);
   }
 
   if (strcmp("global_nb_commits", name) == 0) {
-    *(unsigned long *)val = global_stats.commits;
+    *(unsigned long *)val = mod_stats_global.commits;
     return 1;
   }
   if (strcmp("global_nb_aborts", name) == 0) {
-    *(unsigned long *)val = global_stats.aborts;
+    *(unsigned long *)val = mod_stats_global.retries_acc;
     return 1;
   }
   if (strcmp("global_max_retries", name) == 0) {
-    *(unsigned long *)val = global_stats.max_retries;
+    *(unsigned long *)val = mod_stats_global.retries_max;
     return 1;
   }
 
@@ -79,14 +82,14 @@ int stm_get_global_stats(const char *name, void *val)
  */
 int stm_get_local_stats(TXPARAMS const char *name, void *val)
 {
-  tx_stats_t *stats;
+  mod_stats_data_t *stats;
 
-  if (!initialized) {
+  if (!mod_stats_initialized) {
     fprintf(stderr, "Module mod_stats not initialized\n");
     exit(1);
   }
 
-  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
+  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
   assert(stats != NULL);
 
   if (strcmp("nb_commits", name) == 0) {
@@ -94,11 +97,19 @@ int stm_get_local_stats(TXPARAMS const char *name, void *val)
     return 1;
   }
   if (strcmp("nb_aborts", name) == 0) {
-    *(unsigned long *)val = stats->aborts;
+    *(unsigned long *)val = stats->retries_acc;
     return 1;
   }
-  if (strcmp("max_retries", name) == 0) {
-    *(unsigned long *)val = stats->max_retries;
+  if (strcmp("nb_retries_avg", name) == 0) {
+    *(double *)val = (double)stats->retries_acc / stats->retries_cnt;
+    return 1;
+  }
+  if (strcmp("nb_retries_min", name) == 0) {
+    *(unsigned long *)val = stats->retries_min;
+    return 1;
+  }
+  if (strcmp("nb_retries_max", name) == 0) {
+    *(unsigned long *)val = stats->retries_max;
     return 1;
   }
 
@@ -108,40 +119,49 @@ int stm_get_local_stats(TXPARAMS const char *name, void *val)
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(TXPARAMS void *arg)
+static void mod_stats_on_thread_init(TXPARAMS void *arg)
 {
-  tx_stats_t *stats;
+  mod_stats_data_t *stats;
 
-  if ((stats = (tx_stats_t *)malloc(sizeof(tx_stats_t))) == NULL) {
+  if ((stats = (mod_stats_data_t *)malloc(sizeof(mod_stats_data_t))) == NULL) {
     perror("malloc");
     exit(1);
   }
   stats->commits = 0;
-  stats->aborts = 0;
   stats->retries = 0;
-  stats->max_retries = 0;
+  stats->retries_acc = 0;
+  stats->retries_cnt = 0;
+  stats->retries_min = ULONG_MAX;
+  stats->retries_max = 0;
 
-  stm_set_specific(TXARGS key, stats);
+  stm_set_specific(TXARGS mod_stats_key, stats);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(TXPARAMS void *arg)
+static void mod_stats_on_thread_exit(TXPARAMS void *arg)
 {
-  tx_stats_t *stats;
-  unsigned long max;
+  mod_stats_data_t *stats;
+  unsigned long max, min;
 
-  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
+  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
   assert(stats != NULL);
 
-  ATOMIC_FETCH_ADD_FULL(&global_stats.commits, stats->commits);
-  ATOMIC_FETCH_ADD_FULL(&global_stats.aborts, stats->aborts);
- retry:
-  max = ATOMIC_LOAD(&global_stats.max_retries);
-  if (stats->max_retries > max) {
-    if (ATOMIC_CAS_FULL(&global_stats.max_retries, max, stats->max_retries) == 0)
-      goto retry;
+  ATOMIC_FETCH_ADD_FULL(&mod_stats_global.commits, stats->commits);
+  ATOMIC_FETCH_ADD_FULL(&mod_stats_global.retries_cnt, stats->retries_cnt);
+  ATOMIC_FETCH_ADD_FULL(&mod_stats_global.retries_acc, stats->retries_acc);
+retry_max:
+  max = ATOMIC_LOAD(&mod_stats_global.retries_max);
+  if (stats->retries_max > max) {
+    if (ATOMIC_CAS_FULL(&mod_stats_global.retries_max, max, stats->retries_max) == 0)
+      goto retry_max;
+  }
+retry_min:
+  min = ATOMIC_LOAD(&mod_stats_global.retries_min);
+  if (stats->retries_min < min) {
+    if (ATOMIC_CAS_FULL(&mod_stats_global.retries_min, min, stats->retries_min) == 0)
+      goto retry_min;
   }
 
   free(stats);
@@ -150,31 +170,33 @@ static void on_thread_exit(TXPARAMS void *arg)
 /*
  * Called upon transaction commit.
  */
-static void on_commit(TXPARAMS void *arg)
+static void mod_stats_on_commit(TXPARAMS void *arg)
 {
-  tx_stats_t *stats;
+  mod_stats_data_t *stats;
 
-  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
+  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
   assert(stats != NULL);
-
   stats->commits++;
+  stats->retries_acc += stats->retries;
+  stats->retries_cnt++;
+  if (stats->retries_min > stats->retries)
+    stats->retries_min = stats->retries;
+  if (stats->retries_max < stats->retries)
+    stats->retries_max = stats->retries;
   stats->retries = 0;
 }
 
 /*
  * Called upon transaction abort.
  */
-static void on_abort(TXPARAMS void *arg)
+static void mod_stats_on_abort(TXPARAMS void *arg)
 {
-  tx_stats_t *stats;
+  mod_stats_data_t *stats;
 
-  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
+  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
   assert(stats != NULL);
 
-  stats->aborts++;
   stats->retries++;
-  if (stats->max_retries < stats->retries)
-    stats->max_retries = stats->retries;
 }
 
 /*
@@ -182,14 +204,14 @@ static void on_abort(TXPARAMS void *arg)
  */
 void mod_stats_init()
 {
-  if (initialized)
+  if (mod_stats_initialized)
     return;
 
-  stm_register(on_thread_init, on_thread_exit, NULL, on_commit, on_abort, NULL);
-  key = stm_create_specific();
-  if (key < 0) {
+  stm_register(mod_stats_on_thread_init, mod_stats_on_thread_exit, NULL, mod_stats_on_commit, mod_stats_on_abort, NULL);
+  mod_stats_key = stm_create_specific();
+  if (mod_stats_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");
     exit(1);
   }
-  initialized = 1;
+  mod_stats_initialized = 1;
 }

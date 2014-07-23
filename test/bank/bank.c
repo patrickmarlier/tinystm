@@ -1,6 +1,6 @@
 /*
  * File:
- *   intset.c
+ *   bank.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
@@ -45,7 +45,7 @@
  */
 #define RO                              1
 #define RW                              0
-#define START(id, ro)                   { sigjmp_buf *_e = stm_get_env(); stm_tx_attr_t _a = {id, ro}; sigsetjmp(*_e, 0); stm_start(_e, &_a)
+#define START(id, ro)                   { stm_tx_attr_t _a = {id, ro}; sigjmp_buf *_e = stm_start(&_a); if (_e != NULL) sigsetjmp(*_e, 0)
 #define LOAD(addr)                      stm_load((stm_word_t *)addr)
 #define STORE(addr, value)              stm_store((stm_word_t *)addr, (stm_word_t)value)
 #define COMMIT                          stm_commit(); }
@@ -171,35 +171,43 @@ void barrier_cross(barrier_t *b)
  * ################################################################### */
 
 typedef struct thread_data {
-  int id;
-  int read_all;
-  int read_threads;
-  int write_all;
-  int write_threads;
+  bank_t *bank;
+  barrier_t *barrier;
   unsigned long nb_transfer;
   unsigned long nb_read_all;
   unsigned long nb_write_all;
   unsigned long nb_aborts;
+  unsigned long nb_aborts_1;
+  unsigned long nb_aborts_2;
   unsigned long nb_aborts_locked_read;
   unsigned long nb_aborts_locked_write;
   unsigned long nb_aborts_validate_read;
   unsigned long nb_aborts_validate_write;
   unsigned long nb_aborts_validate_commit;
   unsigned long nb_aborts_invalid_memory;
-  unsigned long nb_aborts_reallocate;
-  unsigned long nb_aborts_rollover;
+  unsigned long nb_aborts_killed;
   unsigned long locked_reads_ok;
   unsigned long locked_reads_failed;
   unsigned long max_retries;
   unsigned int seed;
-  bank_t *bank;
-  barrier_t *barrier;
+  int id;
+  int read_all;
+  int read_threads;
+  int write_all;
+  int write_threads;
+  char padding[64];
 } thread_data_t;
 
 void *test(void *data)
 {
   int src, dst, nb;
   thread_data_t *d = (thread_data_t *)data;
+  unsigned short seed[3];
+
+  /* Initialize seed (use rand48 as rand is poor) */
+  seed[0] = (unsigned short)rand_r(&d->seed);
+  seed[1] = (unsigned short)rand_r(&d->seed);
+  seed[2] = (unsigned short)rand_r(&d->seed);
 
   /* Create transaction */
   stm_init_thread();
@@ -216,7 +224,7 @@ void *test(void *data)
       reset(d->bank);
       d->nb_write_all++;
     } else {
-      nb = rand_r(&d->seed) % 100;
+      nb = (int)(erand48(seed) * 100);
       if (nb < d->read_all) {
         /* Read all */
         total(d->bank, 1);
@@ -227,8 +235,8 @@ void *test(void *data)
         d->nb_write_all++;
       } else {
         /* Choose random accounts */
-        src = rand_r(&d->seed) % d->bank->size;
-        dst = rand_r(&d->seed) % d->bank->size;
+        src = (int)(erand48(seed) * d->bank->size);
+        dst = (int)(erand48(seed) * d->bank->size);
         if (dst == src)
           dst = (src + 1) % d->bank->size;
         transfer(&d->bank->accounts[src], &d->bank->accounts[dst], 1);
@@ -237,14 +245,15 @@ void *test(void *data)
     }
   }
   stm_get_stats("nb_aborts", &d->nb_aborts);
+  stm_get_stats("nb_aborts_1", &d->nb_aborts_1);
+  stm_get_stats("nb_aborts_2", &d->nb_aborts_2);
   stm_get_stats("nb_aborts_locked_read", &d->nb_aborts_locked_read);
   stm_get_stats("nb_aborts_locked_write", &d->nb_aborts_locked_write);
   stm_get_stats("nb_aborts_validate_read", &d->nb_aborts_validate_read);
   stm_get_stats("nb_aborts_validate_write", &d->nb_aborts_validate_write);
   stm_get_stats("nb_aborts_validate_commit", &d->nb_aborts_validate_commit);
   stm_get_stats("nb_aborts_invalid_memory", &d->nb_aborts_invalid_memory);
-  stm_get_stats("nb_aborts_reallocate", &d->nb_aborts_reallocate);
-  stm_get_stats("nb_aborts_rollover", &d->nb_aborts_rollover);
+  stm_get_stats("nb_aborts_killed", &d->nb_aborts_killed);
   stm_get_stats("locked_reads_ok", &d->locked_reads_ok);
   stm_get_stats("locked_reads_failed", &d->locked_reads_failed);
   stm_get_stats("max_retries", &d->max_retries);
@@ -268,6 +277,7 @@ int main(int argc, char **argv)
     // These options don't set a flag
     {"help",                      no_argument,       NULL, 'h'},
     {"accounts",                  required_argument, NULL, 'a'},
+    {"contention-manager",        required_argument, NULL, 'c'},
     {"duration",                  required_argument, NULL, 'd'},
     {"num-threads",               required_argument, NULL, 'n'},
     {"read-all-rate",             required_argument, NULL, 'r'},
@@ -281,9 +291,10 @@ int main(int argc, char **argv)
   bank_t *bank;
   int i, c;
   char *s;
-  unsigned long reads, writes, updates, aborts, aborts_locked_read, aborts_locked_write,
+  unsigned long reads, writes, updates, aborts, aborts_1, aborts_2,
+    aborts_locked_read, aborts_locked_write,
     aborts_validate_read, aborts_validate_write, aborts_validate_commit,
-    aborts_invalid_memory, aborts_reallocate, aborts_rollover,
+    aborts_invalid_memory, aborts_killed,
     locked_reads_ok, locked_reads_failed, max_retries;
   thread_data_t *data;
   pthread_t *threads;
@@ -299,11 +310,12 @@ int main(int argc, char **argv)
   int seed = DEFAULT_SEED;
   int write_all = DEFAULT_WRITE_ALL;
   int write_threads = DEFAULT_WRITE_THREADS;
+  char *cm = NULL;
   sigset_t block_set;
 
   while(1) {
     i = 0;
-    c = getopt_long(argc, argv, "ha:d:n:r:R:s:w:W:", long_options, &i);
+    c = getopt_long(argc, argv, "ha:c:d:n:r:R:s:w:W:", long_options, &i);
 
     if(c == -1)
       break;
@@ -326,6 +338,8 @@ int main(int argc, char **argv)
               "        Print this message\n"
               "  -a, --accounts <int>\n"
               "        Number of accounts in the bank (default=" XSTR(DEFAULT_NB_ACCOUNTS) ")\n"
+              "  -c, --contention-manager <string>\n"
+              "        Contention manager for resolving conflicts (default=suicide)\n"
               "  -d, --duration <int>\n"
               "        Test duration in milliseconds (0=infinite, default=" XSTR(DEFAULT_DURATION) ")\n"
               "  -n, --num-threads <int>\n"
@@ -344,6 +358,9 @@ int main(int argc, char **argv)
        exit(0);
      case 'a':
        nb_accounts = atoi(optarg);
+       break;
+     case 'c':
+       cm = optarg;
        break;
      case 'd':
        duration = atoi(optarg);
@@ -381,6 +398,7 @@ int main(int argc, char **argv)
   assert(read_threads + write_threads <= nb_threads);
 
   printf("Nb accounts    : %d\n", nb_accounts);
+  printf("CM             : %s\n", (cm == NULL ? "DEFAULT" : cm));
   printf("Duration       : %d\n", duration);
   printf("Nb threads     : %d\n", nb_threads);
   printf("Read-all rate  : %d\n", read_all);
@@ -428,6 +446,11 @@ int main(int argc, char **argv)
   if (stm_get_parameter("compile_flags", &s))
     printf("STM flags      : %s\n", s);
 
+  if (cm != NULL) {
+    if (stm_set_parameter("cm_policy", cm) == 0)
+      printf("WARNING: cannot set contention manager \"%s\"\n", cm);
+  }
+
   /* Access set from all threads */
   barrier_init(&barrier, nb_threads + 1);
   pthread_attr_init(&attr);
@@ -443,14 +466,15 @@ int main(int argc, char **argv)
     data[i].nb_read_all = 0;
     data[i].nb_write_all = 0;
     data[i].nb_aborts = 0;
+    data[i].nb_aborts_1 = 0;
+    data[i].nb_aborts_2 = 0;
     data[i].nb_aborts_locked_read = 0;
     data[i].nb_aborts_locked_write = 0;
     data[i].nb_aborts_validate_read = 0;
     data[i].nb_aborts_validate_write = 0;
     data[i].nb_aborts_validate_commit = 0;
     data[i].nb_aborts_invalid_memory = 0;
-    data[i].nb_aborts_reallocate = 0;
-    data[i].nb_aborts_rollover = 0;
+    data[i].nb_aborts_killed = 0;
     data[i].locked_reads_ok = 0;
     data[i].locked_reads_failed = 0;
     data[i].max_retries = 0;
@@ -497,14 +521,15 @@ int main(int argc, char **argv)
 
   duration = (end.tv_sec * 1000 + end.tv_usec / 1000) - (start.tv_sec * 1000 + start.tv_usec / 1000);
   aborts = 0;
+  aborts_1 = 0;
+  aborts_2 = 0;
   aborts_locked_read = 0;
   aborts_locked_write = 0;
   aborts_validate_read = 0;
   aborts_validate_write = 0;
   aborts_validate_commit = 0;
   aborts_invalid_memory = 0;
-  aborts_reallocate = 0;
-  aborts_rollover = 0;
+  aborts_killed = 0;
   locked_reads_ok = 0;
   locked_reads_failed = 0;
   reads = 0;
@@ -523,20 +548,22 @@ int main(int argc, char **argv)
     printf("    #val-w    : %lu\n", data[i].nb_aborts_validate_write);
     printf("    #val-c    : %lu\n", data[i].nb_aborts_validate_commit);
     printf("    #inv-mem  : %lu\n", data[i].nb_aborts_invalid_memory);
-    printf("    #realloc  : %lu\n", data[i].nb_aborts_reallocate);
-    printf("    #r-over   : %lu\n", data[i].nb_aborts_rollover);
+    printf("    #killed   : %lu\n", data[i].nb_aborts_killed);
+    printf("  #aborts>=1  : %lu\n", data[i].nb_aborts_1);
+    printf("  #aborts>=2  : %lu\n", data[i].nb_aborts_2);
     printf("  #lr-ok      : %lu\n", data[i].locked_reads_ok);
     printf("  #lr-failed  : %lu\n", data[i].locked_reads_failed);
     printf("  Max retries : %lu\n", data[i].max_retries);
     aborts += data[i].nb_aborts;
+    aborts_1 += data[i].nb_aborts_1;
+    aborts_2 += data[i].nb_aborts_2;
     aborts_locked_read += data[i].nb_aborts_locked_read;
     aborts_locked_write += data[i].nb_aborts_locked_write;
     aborts_validate_read += data[i].nb_aborts_validate_read;
     aborts_validate_write += data[i].nb_aborts_validate_write;
     aborts_validate_commit += data[i].nb_aborts_validate_commit;
     aborts_invalid_memory += data[i].nb_aborts_invalid_memory;
-    aborts_reallocate += data[i].nb_aborts_reallocate;
-    aborts_rollover += data[i].nb_aborts_rollover;
+    aborts_killed += data[i].nb_aborts_killed;
     locked_reads_ok += data[i].locked_reads_ok;
     locked_reads_failed += data[i].locked_reads_failed;
     updates += data[i].nb_transfer;
@@ -558,8 +585,9 @@ int main(int argc, char **argv)
   printf("  #val-w      : %lu (%f / s)\n", aborts_validate_write, aborts_validate_write * 1000.0 / duration);
   printf("  #val-c      : %lu (%f / s)\n", aborts_validate_commit, aborts_validate_commit * 1000.0 / duration);
   printf("  #inv-mem    : %lu (%f / s)\n", aborts_invalid_memory, aborts_invalid_memory * 1000.0 / duration);
-  printf("  #realloc    : %lu (%f / s)\n", aborts_reallocate, aborts_reallocate * 1000.0 / duration);
-  printf("  #r-over     : %lu (%f / s)\n", aborts_rollover, aborts_rollover * 1000.0 / duration);
+  printf("  #killed     : %lu (%f / s)\n", aborts_killed, aborts_killed * 1000.0 / duration);
+  printf("#aborts>=1    : %lu (%f / s)\n", aborts_1, aborts_1 * 1000.0 / duration);
+  printf("#aborts>=2    : %lu (%f / s)\n", aborts_2, aborts_2 * 1000.0 / duration);
   printf("#lr-ok        : %lu (%f / s)\n", locked_reads_ok, locked_reads_ok * 1000.0 / duration);
   printf("#lr-failed    : %lu (%f / s)\n", locked_reads_failed, locked_reads_failed * 1000.0 / duration);
   printf("Max retries   : %lu\n", max_retries);

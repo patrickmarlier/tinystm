@@ -32,18 +32,21 @@
  * TYPES
  * ################################################################### */
 
-typedef struct mem_block {              /* Block of allocated memory */
+typedef struct mod_mem_block {          /* Block of allocated memory */
   void *addr;                           /* Address of memory */
-  struct mem_block *next;               /* Next block */
-} mem_block_t;
+  struct mod_mem_block *next;           /* Next block */
+} mod_mem_block_t;
 
-typedef struct mem_info {               /* Memory descriptor */
-  mem_block_t *allocated;               /* Memory allocated by this transation (freed upon abort) */
-  mem_block_t *freed;                   /* Memory freed by this transation (freed upon commit) */
-} mem_info_t;
+typedef struct mod_mem_info {           /* Memory descriptor */
+  mod_mem_block_t *allocated;           /* Memory allocated by this transation (freed upon abort) */
+  mod_mem_block_t *freed;               /* Memory freed by this transation (freed upon commit) */
+} mod_mem_info_t;
 
-static int key;
-static int initialized = 0;
+static int mod_mem_key;
+static int mod_mem_initialized = 0;
+#ifdef EPOCH_GC
+static int mod_mem_use_gc = 0;
+#endif /* EPOCH_GC */
 
 /* ################################################################### *
  * FUNCTIONS
@@ -55,15 +58,15 @@ static int initialized = 0;
 void *stm_malloc(TXPARAMS size_t size)
 {
   /* Memory will be freed upon abort */
-  mem_info_t *mi;
-  mem_block_t *mb;
+  mod_mem_info_t *mi;
+  mod_mem_block_t *mb;
 
-  if (!initialized) {
+  if (!mod_mem_initialized) {
     fprintf(stderr, "Module mod_mem not initialized\n");
     exit(1);
   }
 
-  mi = (mem_info_t *)stm_get_specific(TXARGS key);
+  mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
   assert(mi != NULL);
 
   /* Round up size */
@@ -73,7 +76,7 @@ void *stm_malloc(TXPARAMS size_t size)
     size = (size + 7) & ~(size_t)0x07;
   }
 
-  if ((mb = (mem_block_t *)malloc(sizeof(mem_block_t))) == NULL) {
+  if ((mb = (mod_mem_block_t *)malloc(sizeof(mod_mem_block_t))) == NULL) {
     perror("malloc");
     exit(1);
   }
@@ -101,16 +104,16 @@ void stm_free(TXPARAMS void *addr, size_t size)
 void stm_free2(TXPARAMS void *addr, size_t idx, size_t size)
 {
   /* Memory disposal is delayed until commit */
-  mem_info_t *mi;
-  mem_block_t *mb;
+  mod_mem_info_t *mi;
+  mod_mem_block_t *mb;
   stm_word_t *a;
 
-  if (!initialized) {
-    fprintf(stderr, "Module mod_mem not initialized\n");
+  if (!mod_mem_initialized) {
+    fprintf(stderr, "Module mod_mem not mod_mem_initialized\n");
     exit(1);
   }
 
-  mi = (mem_info_t *)stm_get_specific(TXARGS key);
+  mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
   assert(mi != NULL);
 
   /* TODO: if block allocated in same transaction => no need to overwrite */
@@ -130,7 +133,7 @@ void stm_free2(TXPARAMS void *addr, size_t idx, size_t size)
     }
   }
   /* Schedule for removal */
-  if ((mb = (mem_block_t *)malloc(sizeof(mem_block_t))) == NULL) {
+  if ((mb = (mod_mem_block_t *)malloc(sizeof(mod_mem_block_t))) == NULL) {
     perror("malloc");
     exit(1);
   }
@@ -142,36 +145,39 @@ void stm_free2(TXPARAMS void *addr, size_t idx, size_t size)
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(TXPARAMS void *arg)
+static void mod_mem_on_thread_init(TXPARAMS void *arg)
 {
-  mem_info_t *mi;
+  mod_mem_info_t *mi;
 
-  if ((mi = (mem_info_t *)malloc(sizeof(mem_info_t))) == NULL) {
+  if ((mi = (mod_mem_info_t *)malloc(sizeof(mod_mem_info_t))) == NULL) {
     perror("malloc");
     exit(1);
   }
   mi->allocated = mi->freed = NULL;
 
-  stm_set_specific(TXARGS key, mi);
+  stm_set_specific(TXARGS mod_mem_key, mi);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(TXPARAMS void *arg)
+static void mod_mem_on_thread_exit(TXPARAMS void *arg)
 {
-  free(stm_get_specific(TXARGS key));
+  free(stm_get_specific(TXARGS mod_mem_key));
 }
 
 /*
  * Called upon transaction commit.
  */
-static void on_commit(TXPARAMS void *arg)
+static void mod_mem_on_commit(TXPARAMS void *arg)
 {
-  mem_info_t *mi;
-  mem_block_t *mb, *next;
+  mod_mem_info_t *mi;
+  mod_mem_block_t *mb, *next;
+#ifdef EPOCH_GC
+  stm_word_t t = 0;
+#endif /* EPOCH_GC */
 
-  mi = (mem_info_t *)stm_get_specific(TXARGS key);
+  mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
   assert(mi != NULL);
 
   /* Keep memory allocated during transaction */
@@ -188,13 +194,17 @@ static void on_commit(TXPARAMS void *arg)
   /* Dispose of memory freed during transaction */
   if (mi->freed != NULL) {
 #ifdef EPOCH_GC
-    stm_word_t t = stm_get_clock();
+    if (mod_mem_use_gc)
+      t = stm_get_clock();
 #endif /* EPOCH_GC */
     mb = mi->freed;
     while (mb != NULL) {
       next = mb->next;
 #ifdef EPOCH_GC
-      gc_free(mb->addr, t);
+      if (mod_mem_use_gc)
+        gc_free(mb->addr, t);
+      else
+        free(mb->addr);
 #else /* ! EPOCH_GC */
       free(mb->addr);
 #endif /* ! EPOCH_GC */
@@ -208,12 +218,12 @@ static void on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void on_abort(TXPARAMS void *arg)
+static void mod_mem_on_abort(TXPARAMS void *arg)
 {
-  mem_info_t *mi;
-  mem_block_t *mb, *next;
+  mod_mem_info_t *mi;
+  mod_mem_block_t *mb, *next;
 
-  mi = (mem_info_t *)stm_get_specific(TXARGS key);
+  mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
   assert (mi != NULL);
 
   /* Dispose of memory allocated during transaction */
@@ -243,16 +253,19 @@ static void on_abort(TXPARAMS void *arg)
 /*
  * Initialize module.
  */
-void mod_mem_init()
+void mod_mem_init(int gc)
 {
-  if (initialized)
+  if (mod_mem_initialized)
     return;
 
-  stm_register(on_thread_init, on_thread_exit, NULL, on_commit, on_abort, NULL);
-  key = stm_create_specific();
-  if (key < 0) {
+  stm_register(mod_mem_on_thread_init, mod_mem_on_thread_exit, NULL, mod_mem_on_commit, mod_mem_on_abort, NULL);
+  mod_mem_key = stm_create_specific();
+  if (mod_mem_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");
     exit(1);
   }
-  initialized = 1;
+#ifdef EPOCH_GC
+  mod_mem_use_gc = gc;
+#endif /* EPOCH_GC */
+  mod_mem_initialized = 1;
 }
