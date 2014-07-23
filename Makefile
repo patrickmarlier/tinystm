@@ -1,47 +1,48 @@
 include Makefile.common
 
-SRCDIR = $(ROOT)/src
-LIBDIR = $(ROOT)/lib
+CFLAGS += -I$(SRCDIR)
 
-CFLAGS += -I$(SRCDIR)/src
-CFLAGS += -DSTATS
-CFLAGS += -DROLL_OVER_CLOCK
-CFLAGS += -DTLS
+DEFINES += -DINTERNAL_STATS
+DEFINES += -DROLL_OVER_CLOCK
+DEFINES += -DTLS
+# DEFINES += -DCLOCK_IN_CACHE_LINE
+# DEFINES += -DNO_DUPLICATES_IN_RW_SETS
+# DEFINES += -DWAIT_YIELD
+# DEFINES += -DUSE_BLOOM_FILTER
 
-# Choose write-back or write-through version
-VER = wb
-# VER = wt
+# DEFINES += -DDEBUG -DDEBUG2
 
-LIBS = $(LIBDIR)/libtstm.a
-TLIBS = $(LIBDIR)/libtanger-stm.a $(LIBDIR)/libtanger-stm.bc
-TESTS = test/intset test/regression
+# Pick one design
+DEFINES += -DDESIGN=WRITE_BACK_ETL
+# DEFINES += -DDESIGN=WRITE_BACK_CTL
+# DEFINES += -DDESIGN=WRITE_THROUGH
 
-.PHONY:	all clean tanger test
+# Pick one contention manager (CM)
+DEFINES += -DCM=CM_SUICIDE
+# DEFINES += -DCM=CM_DELAY
+# DEFINES += -DCM=CM_BACKOFF
+# DEFINES += -DCM=CM_PRIORITY
 
-all:	$(LIBS)
+CFLAGS += $(DEFINES)
 
-tanger:	$(TLIBS)
+MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
+
+.PHONY:	all test clean realclean
+
+all:	$(TMLIB)
 
 %.o:	%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -DCOMPILE_FLAGS="$(CFLAGS)" -c -o $@ $<
 
-%.bc:	%.c
-	$(LLVMGCC) $(CFLAGS) -emit-llvm -c -o $@ $<
+%.o.c:	%.c
+	$(CC) $(CFLAGS) -DCOMPILE_FLAGS="$(CFLAGS)" -E -Wp,-CC,-P -o $@ $<
 
-$(LIBDIR)/libtstm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/memory.o $(SRCDIR)/wrappers.o
+$(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(MODULES)
 	$(AR) cru $@ $^
 
-$(LIBDIR)/libtanger-stm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/wrappers.o $(SRCDIR)/tanger.o
-	$(AR) cru $@ $^
-
-$(LIBDIR)/libtanger-stm.bc:	$(SRCDIR)/tinySTM-$(VER).bc $(SRCDIR)/wrappers.bc $(SRCDIR)/tanger.bc
-	$(LLVMLD) -link-as-library -o $@ $^
-
-test:	$(LIBS)
+test:	$(TMLIB)
 	$(MAKE) -C test
 
 clean:
-	rm -f $(LIBS) $(TLIBS) $(SRCDIR)/*.o $(SRCDIR)/*.bc
-
-realclean:	clean
+	rm -f $(TMLIB) $(SRCDIR)/*.o $(SRCDIR)/*.bc
 	TARGET=clean $(MAKE) -C test

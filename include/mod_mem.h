@@ -1,10 +1,10 @@
 /*
  * File:
- *   intset-rbtree.h
+ *   mod_mem.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
- *   Set macro to compile red-black tree version of integer set.
+ *   Module for dynamic memory management.
  *
  * Copyright (c) 2007-2008.
  *
@@ -19,8 +19,22 @@
  * GNU General Public License for more details.
  */
 
-#ifndef USE_RBTREE
-#define USE_RBTREE
+#ifndef _MOD_MEM_H_
+#define _MOD_MEM_H_
+
+#include "stm.h"
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-#include "intset.c"
+void *stm_malloc(size_t size);
+void stm_free(void *addr, size_t size);
+
+void mod_mem_init();
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _MOD_MEM_H_ */

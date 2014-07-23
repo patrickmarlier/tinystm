@@ -2,11 +2,11 @@
  * File:
  *   atomic.h
  * Author(s):
- *   Pascal Felber <Pascal.Felber@unine.ch>
+ *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
  *   Atomic operations.
  *
- * Copyright (c) 2007.
+ * Copyright (c) 2007-2008.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,25 +28,29 @@ typedef AO_t atomic_t;
 
 #ifdef NO_AO
 /* Use only for testing purposes (single thread benchmarks) */
-#define ATOMIC_CAS_MB(addr, e, v)       (*(addr) = (v), 1)
-#define ATOMIC_FETCH_AND_INC_MB(addr)   ((*(addr))++)
-#define ATOMIC_LOAD_MB(addr)            (*(addr))
-#define ATOMIC_LOAD(addr)               ATOMIC_LOAD_MB(addr)
-#define ATOMIC_STORE_MB(addr, v)        (*(addr) = (v))
-#define ATOMIC_STORE(addr, v)           ATOMIC_STORE_MB(addr, v)
+#define ATOMIC_CAS_MB(a, e, v)          (*(a) = (v), 1)
+#define ATOMIC_FETCH_AND_INC_MB(a)      ((*(a))++)
+#define ATOMIC_FETCH_AND_DEC_MB(a)      ((*(a))--)
+#define ATOMIC_FETCH_AND_ADD_MB(a, v)   ((*(a)) += (v))
+#define ATOMIC_LOAD_MB(a)               (*(a))
+#define ATOMIC_LOAD(a)                  ATOMIC_LOAD_MB(a)
+#define ATOMIC_STORE_MB(a, v)           (*(a) = (v))
+#define ATOMIC_STORE(a, v)              ATOMIC_STORE_MB(a, v)
 #else /* NO_AO */
-#define ATOMIC_CAS_MB(addr, e, v)       (AO_compare_and_swap_full((volatile AO_t *)(addr), (AO_t)(e), (AO_t)(v)))
-#define ATOMIC_FETCH_AND_INC_MB(addr)   (AO_fetch_and_add1_full((volatile AO_t *)(addr)))
+#define ATOMIC_CAS_MB(a, e, v)          (AO_compare_and_swap_full((volatile AO_t *)(a), (AO_t)(e), (AO_t)(v)))
+#define ATOMIC_FETCH_AND_INC_MB(a)      (AO_fetch_and_add1_full((volatile AO_t *)(a)))
+#define ATOMIC_FETCH_AND_DEC_MB(a)      (AO_fetch_and_sub1_full((volatile AO_t *)(a)))
+#define ATOMIC_FETCH_AND_ADD_MB(a, v)   (AO_fetch_and_add_full((volatile AO_t *)(a), (AO_t)(v)))
 #ifdef SAFE
-#define ATOMIC_LOAD_MB(addr)            (AO_load_full((volatile AO_t *)(addr)))
-#define ATOMIC_LOAD(addr)               ATOMIC_LOAD_MB(addr)
-#define ATOMIC_STORE_MB(addr, v)        (AO_store_full((volatile AO_t *)(addr), (AO_t)(v)))
-#define ATOMIC_STORE(addr, v)           ATOMIC_STORE_MB(addr, v)
+#define ATOMIC_LOAD_MB(a)               (AO_load_full((volatile AO_t *)(a)))
+#define ATOMIC_LOAD(a)                  ATOMIC_LOAD_MB(a)
+#define ATOMIC_STORE_MB(a, v)           (AO_store_full((volatile AO_t *)(a), (AO_t)(v)))
+#define ATOMIC_STORE(a, v)              ATOMIC_STORE_MB(a, v)
 #else /* SAFE */
-#define ATOMIC_LOAD_MB(addr)            (AO_load_acquire_read((volatile AO_t *)(addr)))
-#define ATOMIC_LOAD(addr)               (AO_load((volatile AO_t *)(addr)))
-#define ATOMIC_STORE_MB(addr, v)        (AO_store_release((volatile AO_t *)(addr), (AO_t)(v)))
-#define ATOMIC_STORE(addr, v)           (AO_store((volatile AO_t *)(addr), (AO_t)(v)))
+#define ATOMIC_LOAD_MB(a)               (AO_load_acquire_read((volatile AO_t *)(a)))
+#define ATOMIC_LOAD(a)                  (AO_load((volatile AO_t *)(a)))
+#define ATOMIC_STORE_MB(a, v)           (AO_store_release((volatile AO_t *)(a), (AO_t)(v)))
+#define ATOMIC_STORE(a, v)              (AO_store((volatile AO_t *)(a), (AO_t)(v)))
 #endif /* SAFE */
 #endif /* NO_AO */
 

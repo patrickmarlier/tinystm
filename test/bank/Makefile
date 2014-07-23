@@ -2,7 +2,7 @@ ROOT = ../..
 
 include $(ROOT)/Makefile.common
 
-BINS = intset intset-rbtree
+BINS = bank
 
 .PHONY:	all clean
 

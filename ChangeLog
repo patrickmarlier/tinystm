@@ -1,3 +1,52 @@
+[0.9.5 release]
+
+2008-07-07  Pascal Felber  <pascal.felber@unine.ch>
+	* Added support for the latest version of STAMP.
+	* Removed TANGER wrappers (distributed separately).
+	* Many modifications and fixes.
+
+2008-05-26  Pascal Felber  <pascal.felber@unine.ch>
+	* Added CTL.
+
+2008-05-20  Pascal Felber  <pascal.felber@unine.ch>
+	* Major API changes (no more transaction parameters, etc.).
+	* Added unit transactions.
+	* Many other changes and fixes.
+
+[0.9.0 release]
+
+2008-04-25  Pascal Felber  <pascal.felber@unine.ch>
+	* Removed parameter to stm_new() => transaction cannot be on stack.
+
+2008-03-27  Pascal Felber  <pascal.felber@unine.ch>
+	* Added new module for coarse-grain statistics.
+	* Added new internal statistics.
+	* Added new support for reading configuration parameters.
+
+2008-03-25  Pascal Felber  <pascal.felber@unine.ch>
+	* Merged write-back and write-through in a single file.
+
+2008-03-16  Pascal Felber  <pascal.felber@unine.ch>
+	* Refactored dynamic memory management as a module.
+
+2008-03-15  Pascal Felber  <pascal.felber@unine.ch>
+	* Added support for modules.
+	* Added sample mod_print module.
+
+2008-02-13  Pascal Felber  <pascal.felber@unine.ch>
+	* Improvements to PRIORITY contention manager.
+
+2008-01-21  Pascal Felber  <pascal.felber@unine.ch>
+	* Added BACKOFF contention manager.
+
+2008-01-03  Pascal Felber  <pascal.felber@unine.ch>
+	* Added PRIORITY contention manager.
+	* Added DELAY contention manager.
+	* Added bank benchmark.
+
+2008-01-01  Pascal Felber  <pascal.felber@unine.ch>
+	* Fixed Makefile.
+
 [0.7.3 release]
 
 2007-11-02  Pascal Felber  <pascal.felber@unine.ch>

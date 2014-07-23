@@ -2,11 +2,11 @@
  * File:
  *   tm.h
  * Author(s):
- *   Pascal Felber <Pascal.Felber@unine.ch>
+ *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
  *   Empty file (to avoid source modifications red-black tree).
  *
- * Copyright (c) 2007.
+ * Copyright (c) 2007-2008.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

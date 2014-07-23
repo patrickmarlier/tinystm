@@ -1,24 +1,24 @@
 # Path to LIBATOMIC_OPS
 LIBAO_HOME ?= /usr/local
 
-# Path to TANGER
-TANGER_HOME ?= /usr/local
-
-# Path to TinySTM root directory
+# Path to root directory
 ROOT ?= .
 
 CC ?= gcc
 AR ?= ar
 
-# LLVM (only required for TANGER)
-LLVMGCC ?= llvm-gcc
-LLVMLINK ?= llvm-link
-LLVMLD ?= llvm-ld
-
 # CFLAGS += -g
 CFLAGS += -O3 -DNDEBUG
 
-CFLAGS += -Wall -Wno-unused-function -fno-strict-aliasing -D_REENTRANT
+TM = stm
+
+CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -D_REENTRANT
 CFLAGS += -I$(LIBAO_HOME)/include -I$(TANGER_HOME)/include -I$(ROOT)/include
 
-LDFLAGS += -L$(LIBAO_HOME)/lib -L$(ROOT)/lib -latomic_ops -ltstm -lpthread
+LDFLAGS += -L$(LIBAO_HOME)/lib -L$(ROOT)/lib -latomic_ops -lstm -lpthread
+
+SRCDIR = $(ROOT)/src
+INCDIR = $(ROOT)/include
+LIBDIR = $(ROOT)/lib
+
+TMLIB = $(LIBDIR)/lib$(TM).a

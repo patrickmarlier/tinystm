@@ -1,12 +1,12 @@
 /*
  * File:
- *   memory.c
+ *   mod_mem.c
  * Author(s):
- *   Pascal Felber <Pascal.Felber@unine.ch>
+ *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
- *   STM memory functions.
+ *   Module for dynamic memory management.
  *
- * Copyright (c) 2007.
+ * Copyright (c) 2007-2008.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,10 +19,13 @@
  * GNU General Public License for more details.
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "memory.h"
+#include "mod_mem.h"
+
+#include "stm.h"
 
 /* ################################################################### *
  * TYPES
@@ -33,48 +36,34 @@ typedef struct mem_block {              /* Block of allocated memory */
   struct mem_block *next;               /* Next block */
 } mem_block_t;
 
-struct mem_info {                       /* Memory descriptor */
+typedef struct mem_info {               /* Memory descriptor */
   mem_block_t *allocated;               /* Memory allocated by this transation (freed upon abort) */
   mem_block_t *freed;                   /* Memory freed by this transation (freed upon commit) */
-  stm_tx_t *tx;                         /* Transaction owning memory descriptor */
-};
+} mem_info_t;
+
+static int key;
+static int initialized = 0;
 
 /* ################################################################### *
  * FUNCTIONS
  * ################################################################### */
 
 /*
- * Allocate memory descriptor.
+ * Called by the CURRENT thread to allocate memory within a transaction.
  */
-mem_info_t *mem_new(stm_tx_t *tx)
-{
-  mem_info_t *mi;
-
-  if ((mi = (mem_info_t *)malloc(sizeof(mem_info_t))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-  mi->allocated = mi->freed = NULL;
-  mi->tx = tx;
-
-  return mi;
-}
-
-/*
- * Delete memory descriptor.
- */
-void mem_delete(mem_info_t *mi)
-{
-  free(mi);
-}
-
-/*
- * Allocate memory within a transaction.
- */
-void *mem_alloc(mem_info_t *mi, size_t size)
+void *stm_malloc(size_t size)
 {
   /* Memory will be freed upon abort */
+  mem_info_t *mi;
   mem_block_t *mb;
+
+  if (!initialized) {
+    fprintf(stderr, "Module mod_mem not initialized\n");
+    exit(1);
+  }
+
+  mi = (mem_info_t *)stm_get_specific(key);
+  assert(mi != NULL);
 
   /* Round up size */
   if (sizeof(stm_word_t) == 4) {
@@ -98,13 +87,22 @@ void *mem_alloc(mem_info_t *mi, size_t size)
 }
 
 /*
- * Free memory within a transaction.
+ * Called by the CURRENT thread to free memory within a transaction.
  */
-void mem_free(mem_info_t *mi, void *addr, size_t size)
+void stm_free(void *addr, size_t size)
 {
   /* Memory disposal is delayed until commit */
+  mem_info_t *mi;
   mem_block_t *mb;
   stm_word_t *a;
+
+  if (!initialized) {
+    fprintf(stderr, "Module mod_mem not initialized\n");
+    exit(1);
+  }
+
+  mi = (mem_info_t *)stm_get_specific(key);
+  assert(mi != NULL);
 
   if (size > 0) {
     /* Overwrite to prevent inconsistent reads (we could check if block
@@ -117,7 +115,7 @@ void mem_free(mem_info_t *mi, void *addr, size_t size)
     a = (stm_word_t *)addr;
     while (size-- > 0) {
       /* Acquire lock and update version number */
-      stm_store2(mi->tx, a++, 0, 0);
+      stm_store2(a++, 0, 0);
     }
   }
   /* Schedule for removal */
@@ -131,11 +129,39 @@ void mem_free(mem_info_t *mi, void *addr, size_t size)
 }
 
 /*
- * Commit memory operations performed by transaction.
+ * Called upon thread creation.
  */
-void mem_commit(mem_info_t *mi)
+static void on_thread_init(void *arg)
 {
+  mem_info_t *mi;
+
+  if ((mi = (mem_info_t *)malloc(sizeof(mem_info_t))) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+  mi->allocated = mi->freed = NULL;
+
+  stm_set_specific(key, mi);
+}
+
+/*
+ * Called upon thread deletion.
+ */
+static void on_thread_exit(void *arg)
+{
+  free(stm_get_specific(key));
+}
+
+/*
+ * Called upon transaction commit.
+ */
+static void on_commit(void *arg)
+{
+  mem_info_t *mi;
   mem_block_t *mb, *next;
+
+  mi = (mem_info_t *)stm_get_specific(key);
+  assert(mi != NULL);
 
   /* Keep memory allocated during transaction */
   if (mi->allocated != NULL) {
@@ -162,11 +188,15 @@ void mem_commit(mem_info_t *mi)
 }
 
 /*
- * Abort memory operations performed by transaction.
+ * Called upon transaction abort.
  */
-void mem_abort(mem_info_t *mi)
+static void on_abort(void *arg)
 {
+  mem_info_t *mi;
   mem_block_t *mb, *next;
+
+  mi = (mem_info_t *)stm_get_specific(key);
+  assert (mi != NULL);
 
   /* Dispose of memory allocated during transaction */
   if (mi->allocated != NULL) {
@@ -190,4 +220,21 @@ void mem_abort(mem_info_t *mi)
     }
     mi->freed = NULL;
   }
+}
+
+/*
+ * Initialize module.
+ */
+void mod_mem_init()
+{
+  if (initialized)
+    return;
+
+  stm_register(on_thread_init, on_thread_exit, NULL, on_commit, on_abort, NULL);
+  key = stm_create_specific();
+  if (key < 0) {
+    fprintf(stderr, "Cannot create specific key\n");
+    exit(1);
+  }
+  initialized = 1;
 }

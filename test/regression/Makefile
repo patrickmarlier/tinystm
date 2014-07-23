@@ -11,7 +11,7 @@ all:	$(BINS)
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BINS):	%:	%.o
+$(BINS):	%:	%.o $(TMLIB)
 	$(CC) -o $@ $< $(LDFLAGS)
 
 clean:

@@ -1,6 +1,6 @@
 .PHONY:	all
 
-TESTS = intset regression
+TESTS = bank intset regression
 
 .PHONY:	all $(TESTS)
 

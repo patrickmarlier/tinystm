@@ -1,12 +1,12 @@
 /*
  * File:
- *   intset-rbtree.h
+ *   util.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
- *   Set macro to compile red-black tree version of integer set.
+ *   Various utility functions.
  *
- * Copyright (c) 2007-2008.
+ * Copyright (c) 2008.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -19,8 +19,31 @@
  * GNU General Public License for more details.
  */
 
-#ifndef USE_RBTREE
-#define USE_RBTREE
+#ifndef _UTIL_H_
+#define _UTIL_H_
+
+#include "stm.h"
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-#include "intset.c"
+static __inline__ void *w2vp(stm_word_t val)
+{
+  union { stm_word_t w; void *v; } convert;
+  convert.w = val;
+  return convert.v;
+}
+
+static __inline__ stm_word_t vp2w(void *val)
+{
+  union { stm_word_t w; void *v; } convert;
+  convert.v = val;
+  return convert.w;
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _UTIL_H_ */

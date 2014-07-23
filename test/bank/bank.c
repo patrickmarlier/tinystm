@@ -4,7 +4,7 @@
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
- *   Integer set stress test.
+ *   Bank stress test.
  *
  * Copyright (c) 2007-2008.
  *
@@ -32,7 +32,6 @@
 #include <atomic_ops.h>
 
 #include "stm.h"
-#include "mod_mem.h"
 
 #ifdef DEBUG
 #define IO_FLUSH                        fflush(NULL)
@@ -49,15 +48,15 @@
 #define LOAD(addr)                      stm_load((stm_word_t *)addr)
 #define STORE(addr, value)              stm_store((stm_word_t *)addr, (stm_word_t)value)
 #define COMMIT                          stm_commit(); }
-#define MALLOC(size)                    stm_malloc(size)
-#define FREE(addr, size)                stm_free(addr, size)
 
 #define DEFAULT_DURATION                10000
-#define DEFAULT_INITIAL                 256
+#define DEFAULT_NB_ACCOUNTS             1024
 #define DEFAULT_NB_THREADS              1
-#define DEFAULT_RANGE                   0xFFFF
+#define DEFAULT_READ_ALL                20
 #define DEFAULT_SEED                    0
-#define DEFAULT_UPDATE                  20
+#define DEFAULT_WRITE_ALL               0
+#define DEFAULT_READ_THREADS            0
+#define DEFAULT_WRITE_THREADS           0
 
 #define XSTR(s)                         STR(s)
 #define STR(s)                          #s
@@ -68,317 +67,68 @@
 
 static volatile AO_t stop;
 
-#ifdef USE_RBTREE
-
 /* ################################################################### *
- * RBTREE
+ * BANK ACCOUNTS
  * ################################################################### */
 
-#define TM_ARGDECL_ALONE                /* nothing */
-#define TM_ARGDECL                      /* nothing */
-#define TM_ARG                          /* nothing */
-#define TM_ARG_ALONE                    /* nothing */
+typedef struct account {
+  int number;
+  int balance;
+} account_t;
 
-#define TM_SHARED_READ(var)             LOAD(&(var))
-#define TM_SHARED_READ_P(var)           LOAD(&(var))
-
-#define TM_SHARED_WRITE(var, val)       STORE(&(var), val)
-#define TM_SHARED_WRITE_P(var, val)     STORE(&(var), val)
-
-#define TM_MALLOC(size)                 MALLOC(size)
-#define TM_FREE(ptr)                    FREE(ptr, 0)
-/* Cleaner but slower: FREE(ptr, sizeof(*ptr)) */
-
-#include "rbtree.h"
-
-#include "rbtree.c"
-
-typedef rbtree_t intset_t;
-
-intset_t *set_new()
-{
-  return rbtree_alloc();
-}
-
-void set_delete(intset_t *set)
-{
-  rbtree_free(set);
-}
-
-int set_size(intset_t *set)
-{
+typedef struct bank {
+  account_t *accounts;
   int size;
-  node_t *n;
+} bank_t;
 
-  if (!rbtree_verify(set, 0)) {
-    printf("Validation failed!\n");
-    exit(1);
-  }
+int transfer(account_t *src, account_t *dst, int amount)
+{
+  int i;
 
-  size = 0;
-  for (n = firstEntry(set); n != NULL; n = successor(n))
-    size++;
+  /* Allow overdrafts */
+  START;
+  i = (int)LOAD(&src->balance);
+  i -= amount;
+  STORE(&src->balance, i);
+  i = (int)LOAD(&dst->balance);
+  i += amount;
+  STORE(&dst->balance, i);
+  COMMIT;
 
-  return size;
+  return amount;
 }
 
-int set_add(intset_t *set, intptr_t val, int transactional)
+int total(bank_t *bank, int transactional)
 {
-  int res;
+  int i, total;
 
   if (!transactional) {
-    res = !rbtree_insert(set, val, val);
-  } else {
-    START;
-    res = !TMrbtree_insert(set, val, val);
-    COMMIT;
-  }
-
-  return res;
-}
-
-int set_remove(intset_t *set, intptr_t val, int transactional)
-{
-  int res;
-
-  if (!transactional) {
-    res = rbtree_delete(set, val);
-  } else {
-    START;
-    res = TMrbtree_delete(set, val);
-    COMMIT;
-  }
-
-  return res;
-}
-
-int set_contains(intset_t *set, intptr_t val, int transactional)
-{
-  int res;
-
-  if (!transactional) {
-    res = rbtree_contains(set, val);
+    total = 0;
+    for (i = 0; i < bank->size; i++) {
+      total += bank->accounts[i].balance;
+    }
   } else {
     START_RO;
-    res = TMrbtree_contains(set, val);
-    COMMIT;
-  }
-
-  return res;
-}
-
-#else /* USE_RBTREE */
-
-/* ################################################################### *
- * INT SET
- * ################################################################### */
-
-typedef intptr_t val_t;
-#define VAL_MIN                         INT_MIN
-#define VAL_MAX                         INT_MAX
-
-typedef struct node {
-  val_t val;
-  struct node *next;
-} node_t;
-
-typedef struct intset {
-  node_t *head;
-} intset_t;
-
-node_t *new_node(val_t val, node_t *next, int transactional)
-{
-  node_t *node;
-
-  if (!transactional) {
-    node = (node_t *)malloc(sizeof(node_t));
-  } else {
-    node = (node_t *)MALLOC(sizeof(node_t));
-  }
-  if (node == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-
-  node->val = val;
-  node->next = next;
-
-  return node;
-}
-
-intset_t *set_new()
-{
-  intset_t *set;
-  node_t *min, *max;
-
-  if ((set = (intset_t *)malloc(sizeof(intset_t))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-  max = new_node(VAL_MAX, NULL, 0);
-  min = new_node(VAL_MIN, max, 0);
-  set->head = min;
-
-  return set;
-}
-
-void set_delete(intset_t *set)
-{
-  node_t *node, *next;
-
-  node = set->head;
-  while (node != NULL) {
-    next = node->next;
-    free(node);
-    node = next;
-  }
-  free(set);
-}
-
-int set_size(intset_t *set)
-{
-  int size = 0;
-  node_t *node;
-
-  /* We have at least 2 elements */
-  node = set->head->next;
-  while (node->next != NULL) {
-    size++;
-    node = node->next;
-  }
-
-  return size;
-}
-
-int set_add(intset_t *set, val_t val, int transactional)
-{
-  int result;
-  node_t *prev, *next;
-  val_t v;
-
-#ifdef DEBUG
-  printf("++> set_add(%d)\n", val);
-  IO_FLUSH;
-#endif
-
-  if (!transactional) {
-    prev = set->head;
-    next = prev->next;
-    while (next->val < val) {
-      prev = next;
-      next = prev->next;
-    }
-    result = (next->val != val);
-    if (result) {
-      prev->next = new_node(val, next, transactional);
-    }
-  } else {
-    START;
-    prev = (node_t *)LOAD(&set->head);
-    next = (node_t *)LOAD(&prev->next);
-    while (1) {
-      v = LOAD(&next->val);
-      if (v >= val)
-        break;
-      prev = next;
-      next = (node_t *)LOAD(&prev->next);
-    }
-    result = (v != val);
-    if (result) {
-      STORE(&prev->next, new_node(val, next, transactional));
+    total = 0;
+    for (i = 0; i < bank->size; i++) {
+      total += (int)LOAD(&bank->accounts[i].balance);
     }
     COMMIT;
   }
 
-  return result;
+  return total;
 }
 
-int set_remove(intset_t *set, val_t val, int transactional)
+void reset(bank_t *bank)
 {
-  int result;
-  node_t *prev, *next;
-  val_t v;
-  node_t *n;
+  int i;
 
-#ifdef DEBUG
-  printf("++> set_remove(%d)\n", val);
-  IO_FLUSH;
-#endif
-
-  if (!transactional) {
-    prev = set->head;
-    next = prev->next;
-    while (next->val < val) {
-      prev = next;
-      next = prev->next;
-    }
-    result = (next->val == val);
-    if (result) {
-      prev->next = next->next;
-      free(next);
-    }
-  } else {
-    START;
-    prev = (node_t *)LOAD(&set->head);
-    next = (node_t *)LOAD(&prev->next);
-    while (1) {
-      v = LOAD(&next->val);
-      if (v >= val)
-        break;
-      prev = next;
-      next = (node_t *)LOAD(&prev->next);
-    }
-    result = (v == val);
-    if (result) {
-      n = (node_t *)LOAD(&next->next);
-      STORE(&prev->next, n);
-      /* Free memory (delayed until commit) */
-      FREE(next, sizeof(node_t));
-    }
-    COMMIT;
+  START;
+  for (i = 0; i < bank->size; i++) {
+    STORE(&bank->accounts[i].balance, 0);
   }
-
-  return result;
+  COMMIT;
 }
-
-int set_contains(intset_t *set, val_t val, int transactional)
-{
-  int result;
-  node_t *prev, *next;
-  val_t v;
-
-#ifdef DEBUG
-  printf("++> set_contains(%d)\n", val);
-  IO_FLUSH;
-#endif
-
-  if (!transactional) {
-    prev = set->head;
-    next = prev->next;
-    while (next->val < val) {
-      prev = next;
-      next = prev->next;
-    }
-    result = (next->val == val);
-  } else {
-    START_RO;
-    prev = (node_t *)LOAD(&set->head);
-    next = (node_t *)LOAD(&prev->next);
-    while (1) {
-      v = LOAD(&next->val);
-      if (v >= val)
-        break;
-      prev = next;
-      next = (node_t *)LOAD(&prev->next);
-    }
-    result = (v == val);
-    COMMIT;
-  }
-
-  return result;
-}
-
-#endif /* USE_RBTREE */
 
 /* ################################################################### *
  * BARRIER
@@ -420,12 +170,14 @@ void barrier_cross(barrier_t *b)
  * ################################################################### */
 
 typedef struct thread_data {
-  int range;
-  int update;
-  unsigned long nb_add;
-  unsigned long nb_remove;
-  unsigned long nb_contains;
-  unsigned long nb_found;
+  int id;
+  int read_all;
+  int read_threads;
+  int write_all;
+  int write_threads;
+  unsigned long nb_transfer;
+  unsigned long nb_read_all;
+  unsigned long nb_write_all;
   unsigned long nb_aborts;
   unsigned long nb_aborts_locked_read;
   unsigned long nb_aborts_locked_write;
@@ -434,15 +186,14 @@ typedef struct thread_data {
   unsigned long nb_aborts_validate_commit;
   unsigned long nb_aborts_invalid_memory;
   unsigned long max_retries;
-  int diff;
   unsigned int seed;
-  intset_t *set;
+  bank_t *bank;
   barrier_t *barrier;
 } thread_data_t;
 
 void *test(void *data)
 {
-  int val, last = 0;
+  int src, dst, nb;
   thread_data_t *d = (thread_data_t *)data;
 
   /* Create transaction */
@@ -450,31 +201,34 @@ void *test(void *data)
   /* Wait on barrier */
   barrier_cross(d->barrier);
 
-  last = -1;
   while (stop == 0) {
-    val = rand_r(&d->seed) % 100;
-    if (val < d->update) {
-      if (last < 0) {
-        /* Add random value */
-        val = (rand_r(&d->seed) % d->range) + 1;
-        if (set_add(d->set, val, 1)) {
-          d->diff++;
-          last = val;
-        }
-        d->nb_add++;
-      } else {
-        /* Remove last value */
-        if (set_remove(d->set, last, 1))
-          d->diff--;
-        d->nb_remove++;
-        last = -1;
-      }
+    if (d->id < d->read_threads) {
+      /* Read all */
+      total(d->bank, 1);
+      d->nb_read_all++;
+    } else if (d->id < d->read_threads + d->write_threads) {
+      /* Write all */
+      reset(d->bank);
+      d->nb_write_all++;
     } else {
-      /* Look for random value */
-      val = (rand_r(&d->seed) % d->range) + 1;
-      if (set_contains(d->set, val, 1))
-        d->nb_found++;
-      d->nb_contains++;
+      nb = rand_r(&d->seed) % 100;
+      if (nb < d->read_all) {
+        /* Read all */
+        total(d->bank, 1);
+        d->nb_read_all++;
+      } else if (nb < d->read_all + d->write_all) {
+        /* Write all */
+        reset(d->bank);
+        d->nb_write_all++;
+      } else {
+        /* Choose random accounts */
+        src = rand_r(&d->seed) % d->bank->size;
+        dst = rand_r(&d->seed) % d->bank->size;
+        if (dst == src)
+          dst = (src + 1) % d->bank->size;
+        transfer(&d->bank->accounts[src], &d->bank->accounts[dst], 1);
+        d->nb_transfer++;
+      }
     }
   }
   stm_get_parameter("nb_aborts", &d->nb_aborts);
@@ -501,19 +255,21 @@ int main(int argc, char **argv)
   struct option long_options[] = {
     // These options don't set a flag
     {"help",                      no_argument,       NULL, 'h'},
+    {"accounts",                  required_argument, NULL, 'a'},
     {"duration",                  required_argument, NULL, 'd'},
-    {"initial-size",              required_argument, NULL, 'i'},
     {"num-threads",               required_argument, NULL, 'n'},
-    {"range",                     required_argument, NULL, 'r'},
+    {"read-all-rate",             required_argument, NULL, 'r'},
+    {"read-threads",              required_argument, NULL, 'R'},
     {"seed",                      required_argument, NULL, 's'},
-    {"update-rate",               required_argument, NULL, 'u'},
+    {"write-all-rate",            required_argument, NULL, 'w'},
+    {"write-threads",             required_argument, NULL, 'W'},
     {NULL, 0, NULL, 0}
   };
 
-  intset_t *set;
-  int i, c, val, size;
+  bank_t *bank;
+  int i, c;
   char *s;
-  unsigned long reads, updates, aborts, aborts_locked_read, aborts_locked_write,
+  unsigned long reads, writes, updates, aborts, aborts_locked_read, aborts_locked_write,
     aborts_validate_read, aborts_validate_write, aborts_validate_commit,
     aborts_invalid_memory, max_retries;
   thread_data_t *data;
@@ -523,16 +279,18 @@ int main(int argc, char **argv)
   struct timeval start, end;
   struct timespec timeout;
   int duration = DEFAULT_DURATION;
-  int initial = DEFAULT_INITIAL;
+  int nb_accounts = DEFAULT_NB_ACCOUNTS;
   int nb_threads = DEFAULT_NB_THREADS;
-  int range = DEFAULT_RANGE;
+  int read_all = DEFAULT_READ_ALL;
+  int read_threads = DEFAULT_READ_THREADS;
   int seed = DEFAULT_SEED;
-  int update = DEFAULT_UPDATE;
+  int write_all = DEFAULT_WRITE_ALL;
+  int write_threads = DEFAULT_WRITE_THREADS;
   sigset_t block_set;
 
   while(1) {
     i = 0;
-    c = getopt_long(argc, argv, "hd:i:n:r:s:u:", long_options, &i);
+    c = getopt_long(argc, argv, "ha:d:n:r:R:s:w:W:", long_options, &i);
 
     if(c == -1)
       break;
@@ -545,50 +303,55 @@ int main(int argc, char **argv)
        /* Flag is automatically set */
        break;
      case 'h':
-       printf("intset -- STM stress test "
-#ifdef USE_RBTREE
-              "(red-black tree)\n"
-#else
-              "(linked list)\n"
-#endif
+       printf("bank -- STM stress test\n"
               "\n"
               "Usage:\n"
-              "  intset [options...]\n"
+              "  bank [options...]\n"
               "\n"
               "Options:\n"
               "  -h, --help\n"
               "        Print this message\n"
+              "  -a, --accounts <int>\n"
+              "        Number of accounts in the bank (default=" XSTR(DEFAULT_NB_ACCOUNTS) ")\n"
               "  -d, --duration <int>\n"
               "        Test duration in milliseconds (0=infinite, default=" XSTR(DEFAULT_DURATION) ")\n"
-              "  -i, --initial-size <int>\n"
-              "        Number of elements to insert before test (default=" XSTR(DEFAULT_INITIAL) ")\n"
               "  -n, --num-threads <int>\n"
               "        Number of threads (default=" XSTR(DEFAULT_NB_THREADS) ")\n"
-              "  -r, --range <int>\n"
-              "        Range of integer values inserted in set (default=" XSTR(DEFAULT_RANGE) ")\n"
+              "  -r, --read-all-rate <int>\n"
+              "        Percentage of read-all transactions (default=" XSTR(DEFAULT_READ_ALL) ")\n"
+              "  -R, --read-threads <int>\n"
+              "        Number of threads issuing only read-all transactions (default=" XSTR(DEFAULT_READ_THREADS) ")\n"
               "  -s, --seed <int>\n"
               "        RNG seed (0=time-based, default=" XSTR(DEFAULT_SEED) ")\n"
-              "  -u, --update-rate <int>\n"
-              "        Percentage of update transactions (default=" XSTR(DEFAULT_UPDATE) ")\n"
+              "  -w, --write-all-rate <int>\n"
+              "        Percentage of write-all transactions (default=" XSTR(DEFAULT_WRITE_ALL) ")\n"
+              "  -W, --write-threads <int>\n"
+              "        Number of threads issuing only write-all transactions (default=" XSTR(DEFAULT_WRITE_THREADS) ")\n"
          );
        exit(0);
+     case 'a':
+       nb_accounts = atoi(optarg);
+       break;
      case 'd':
        duration = atoi(optarg);
-       break;
-     case 'i':
-       initial = atoi(optarg);
        break;
      case 'n':
        nb_threads = atoi(optarg);
        break;
      case 'r':
-       range = atoi(optarg);
+       read_all = atoi(optarg);
+       break;
+     case 'R':
+       read_threads = atoi(optarg);
        break;
      case 's':
        seed = atoi(optarg);
        break;
-     case 'u':
-       update = atoi(optarg);
+     case 'w':
+       write_all = atoi(optarg);
+       break;
+     case 'W':
+       write_threads = atoi(optarg);
        break;
      case '?':
        printf("Use -h or --help for help\n");
@@ -599,23 +362,20 @@ int main(int argc, char **argv)
   }
 
   assert(duration >= 0);
-  assert(initial >= 0);
+  assert(nb_accounts >= 2);
   assert(nb_threads > 0);
-  assert(range > 0 && range >= initial);
-  assert(update >= 0 && update <= 100);
+  assert(read_all >= 0 && write_all >= 0 && read_all + write_all <= 100);
+  assert(read_threads + write_threads <= nb_threads);
 
-#ifdef USE_RBTREE
-  printf("Set type     : red-black tree\n");
-#else
-  printf("Set type     : linked list\n");
-#endif
-  printf("Duration     : %d\n", duration);
-  printf("Initial size : %d\n", initial);
-  printf("Nb threads   : %d\n", nb_threads);
-  printf("Value range  : %d\n", range);
-  printf("Seed         : %d\n", seed);
-  printf("Update rate  : %d\n", update);
-  printf("Type sizes   : int=%d/long=%d/ptr=%d/word=%d\n",
+  printf("Nb accounts    : %d\n", nb_accounts);
+  printf("Duration       : %d\n", duration);
+  printf("Nb threads     : %d\n", nb_threads);
+  printf("Read-all rate  : %d\n", read_all);
+  printf("Read threads   : %d\n", read_threads);
+  printf("Seed           : %d\n", seed);
+  printf("Write-all rate : %d\n", write_all);
+  printf("Write threads  : %d\n", write_threads);
+  printf("Type sizes     : int=%d/long=%d/ptr=%d/word=%d\n",
          (int)sizeof(int),
          (int)sizeof(long),
          (int)sizeof(void *),
@@ -638,28 +398,22 @@ int main(int argc, char **argv)
   else
     srand(seed);
 
-  set = set_new();
+  bank = (bank_t *)malloc(sizeof(bank_t));
+  bank->accounts = (account_t *)malloc(nb_accounts * sizeof(account_t));
+  bank->size = nb_accounts;
+  for (i = 0; i < bank->size; i++) {
+    bank->accounts[i].number = i;
+    bank->accounts[i].balance = 0;
+  }
 
   stop = 0;
 
   /* Init STM */
   printf("Initializing STM\n");
   stm_init();
-  mod_mem_init();
 
   if (stm_get_parameter("compile_flags", &s))
-    printf("STM flags    : %s\n", s);
-
-  /* Populate set */
-  printf("Adding %d entries to set\n", initial);
-  i = 0;
-  while (i < initial) {
-    val = (rand() % range) + 1;
-    if (set_add(set, val, 0))
-      i++;
-  }
-  size = set_size(set);
-  printf("Set size     : %d\n", size);
+    printf("STM flags      : %s\n", s);
 
   /* Access set from all threads */
   barrier_init(&barrier, nb_threads + 1);
@@ -667,12 +421,14 @@ int main(int argc, char **argv)
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
   for (i = 0; i < nb_threads; i++) {
     printf("Creating thread %d\n", i);
-    data[i].range = range;
-    data[i].update = update;
-    data[i].nb_add = 0;
-    data[i].nb_remove = 0;
-    data[i].nb_contains = 0;
-    data[i].nb_found = 0;
+    data[i].id = i;
+    data[i].read_all = read_all;
+    data[i].read_threads = read_threads;
+    data[i].write_all = write_all;
+    data[i].write_threads = write_threads;
+    data[i].nb_transfer = 0;
+    data[i].nb_read_all = 0;
+    data[i].nb_write_all = 0;
     data[i].nb_aborts = 0;
     data[i].nb_aborts_locked_read = 0;
     data[i].nb_aborts_locked_write = 0;
@@ -681,9 +437,8 @@ int main(int argc, char **argv)
     data[i].nb_aborts_validate_commit = 0;
     data[i].nb_aborts_invalid_memory = 0;
     data[i].max_retries = 0;
-    data[i].diff = 0;
     data[i].seed = rand();
-    data[i].set = set;
+    data[i].bank = bank;
     data[i].barrier = &barrier;
     if (pthread_create(&threads[i], &attr, test, (void *)(&data[i])) != 0) {
       fprintf(stderr, "Error creating thread\n");
@@ -732,14 +487,14 @@ int main(int argc, char **argv)
   aborts_validate_commit = 0;
   aborts_invalid_memory = 0;
   reads = 0;
+  writes = 0;
   updates = 0;
   max_retries = 0;
   for (i = 0; i < nb_threads; i++) {
     printf("Thread %d\n", i);
-    printf("  #add        : %lu\n", data[i].nb_add);
-    printf("  #remove     : %lu\n", data[i].nb_remove);
-    printf("  #contains   : %lu\n", data[i].nb_contains);
-    printf("  #found      : %lu\n", data[i].nb_found);
+    printf("  #transfer   : %lu\n", data[i].nb_transfer);
+    printf("  #read-all   : %lu\n", data[i].nb_read_all);
+    printf("  #write-all  : %lu\n", data[i].nb_write_all);
     printf("  #aborts     : %lu\n", data[i].nb_aborts);
     printf("    #lock-r   : %lu\n", data[i].nb_aborts_locked_read);
     printf("    #lock-w   : %lu\n", data[i].nb_aborts_locked_write);
@@ -755,16 +510,17 @@ int main(int argc, char **argv)
     aborts_validate_write += data[i].nb_aborts_validate_write;
     aborts_validate_commit += data[i].nb_aborts_validate_commit;
     aborts_invalid_memory += data[i].nb_aborts_invalid_memory;
-    reads += data[i].nb_contains;
-    updates += (data[i].nb_add + data[i].nb_remove);
-    size += data[i].diff;
+    updates += data[i].nb_transfer;
+    reads += data[i].nb_read_all;
+    writes += data[i].nb_write_all;
     if (max_retries < data[i].max_retries)
       max_retries = data[i].max_retries;
   }
-  printf("Set size      : %d (expected: %d)\n", set_size(set), size);
+  printf("Bank total    : %d (expected: 0)\n", total(bank, 0));
   printf("Duration      : %d (ms)\n", duration);
-  printf("#txs          : %lu (%f / s)\n", reads + updates, (reads + updates) * 1000.0 / duration);
+  printf("#txs          : %lu (%f / s)\n", reads + writes + updates, (reads + writes + updates) * 1000.0 / duration);
   printf("#read txs     : %lu (%f / s)\n", reads, reads * 1000.0 / duration);
+  printf("#write txs    : %lu (%f / s)\n", writes, writes * 1000.0 / duration);
   printf("#update txs   : %lu (%f / s)\n", updates, updates * 1000.0 / duration);
   printf("#aborts       : %lu (%f / s)\n", aborts, aborts * 1000.0 / duration);
   printf("  #lock-r     : %lu (%f / s)\n", aborts_locked_read, aborts_locked_read * 1000.0 / duration);
@@ -775,8 +531,9 @@ int main(int argc, char **argv)
   printf("  #inv-mem    : %lu (%f / s)\n", aborts_invalid_memory, aborts_invalid_memory * 1000.0 / duration);
   printf("Max retries   : %lu\n", max_retries);
 
-  /* Delete set */
-  set_delete(set);
+  /* Delete bank and accounts */
+  free(bank->accounts);
+  free(bank);
 
   /* Cleanup STM */
   stm_exit();

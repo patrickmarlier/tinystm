@@ -1,11 +1,11 @@
 OVERVIEW:
 
-TinySTM is a lightweight but efficient word-based STM implementation
-that uses encounter-time locking.  This distribution includes two
-versions of TinySTM: write-back (updates are kept in thread-private
-memory until commit time) and write-through (updates are directly
-written to memory).  The version can be selected by editing the
-Makefile.
+TinySTM is a lightweight but efficient word-based STM implementation.
+This distribution includes three versions of TinySTM: write-back
+(updates are kept in thread-private memory until commit time),
+write-through (updates are directly written to memory), and commit-time
+locking (locks are only acquired upon commit).  The version can be
+selected by editing the Makefile.
 
 TinySTM compiles and runs on 32 or 64-bit architectures.  It was tested
 on various flavors of Unix, on Mac OS X, and on Windows using cygwin.
@@ -20,14 +20,8 @@ TinySTM requires the atomic_ops library, freely available from:
 The environment variable LIBAO_HOME must be set to the installation
 directory of atomic_ops, if different from /usr/local.
 
-If you want to generate the libraries for TANGER, the environment
-variable TANGER_HOME must be set to the installation directory of
-TANGER. Alternatively, environment variables can be specified when
-invoking `make'.
-
 To compile TinySTM libraries, execute `make' in the main directory. To
-compile test applications, execute `make test'.  To compile libraries
-for TANGER, execute `make tanger' or `make tanger TANGER_HOME=<path>'.
+compile test applications, execute `make test'.
 
 NOTES:
 

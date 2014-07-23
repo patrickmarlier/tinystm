@@ -1,10 +1,10 @@
 /*
  * File:
- *   intset-rbtree.h
+ *   mod_print.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
- *   Set macro to compile red-black tree version of integer set.
+ *   Module to test callbacks.
  *
  * Copyright (c) 2007-2008.
  *
@@ -19,8 +19,17 @@
  * GNU General Public License for more details.
  */
 
-#ifndef USE_RBTREE
-#define USE_RBTREE
+#ifndef _MOD_PRINT_H_
+#define _MOD_PRINT_H_
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
-#include "intset.c"
+void mod_print_init();
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _MOD_PRINT_H_ */
