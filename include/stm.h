@@ -83,11 +83,11 @@
 /**
  * Version string
  */
-# define STM_VERSION                    "1.0.5"
+# define STM_VERSION                    "1.0.6"
 /**
  * Version number (times 100)
  */
-# define STM_VERSION_NB                 105
+# define STM_VERSION_NB                 106
 
 /**
  * Calling convention
