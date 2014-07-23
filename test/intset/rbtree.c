@@ -1250,9 +1250,7 @@ TMgetNode (TM_ARGDECL_ALONE)
 static void
 releaseNode (node_t* n)
 {
-/* TODO: enable this
     free(n);
-*/
 }
 
 

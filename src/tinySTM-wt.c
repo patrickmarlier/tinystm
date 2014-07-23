@@ -27,6 +27,7 @@
 #include <pthread.h>
 
 #include "atomic.h"
+#include "memory.h"
 #include "tinySTM.h"
 
 #define COMPILE_TIME_ASSERT(pred)       switch (0) { case 0: case pred: ; }
@@ -93,11 +94,6 @@ typedef struct w_set {                  /* Write set */
   int size;                             /* Size of array */
 } w_set_t;
 
-typedef struct mem_block {              /* Block of allocated memory */
-  void *addr;                           /* Address of memory */
-  struct mem_block *next;               /* Next block */
-} mem_block_t;
-
 struct stm_tx {                         /* Transaction descriptor */
   stm_word_t status;                    /* Transaction status (not read by other threads) */
   stm_word_t start;                     /* Start timestamp */
@@ -106,22 +102,47 @@ struct stm_tx {                         /* Transaction descriptor */
   w_set_t w_set;                        /* Write set */
   sigjmp_buf env;                       /* Environment for setjmp/longjmp */
   sigjmp_buf *jmp;                      /* Pointer to environment (NULL when not using setjmp/longjmp) */
+  int nesting;                          /* Nesting level */
   int *ro_hint;                         /* Is the transaction read-only (hint)? */
   int ro;                               /* Is this execution read-only? */
   int must_free;                        /* Did we allocate memory for this descriptor? */
-  mem_block_t *allocated;               /* Memory allocated by this transation (freed upon abort) */
-  mem_block_t *freed;                   /* Memory freed by this transation (freed upon commit) */
+  mem_info_t *memory;                   /* Memory allocated/freed by this transation */
   void *data;                           /* Transaction-specific data */
 #ifdef STATS
   unsigned long aborts;                 /* Total number of aborts (cumulative) */
 #endif
 };
 
+/*
+ * Transaction nesting is supported in a minimalist way (flat nesting):
+ * - When a transaction is started in the context of another
+ *   transaction, we simply increment a nesting counter but do not
+ *   actually start a new transaction.
+ * - The environment to be used for setjmp/longjmp is only returned when
+ *   no transaction is active so that it is not overwritten by nested
+ *   transactions. This allows for composability as the caller does not
+ *   need to know whether it executes inside another transaction.
+ * - The commit of a nested transaction simply decrements the nesting
+ *   counter. Only the commit of the top-level transaction will actually
+ *   carry through updates to shared memory.
+ * - An abort of a nested transaction will rollback the top-level
+ *   transaction and reset the nesting counter. The call to longjmp will
+ *   restart execution before the top-level transaction.
+ * Using nested transactions without setjmp/longjmp is not recommended
+ * as one would need to explicitly jump back outside of the top-level
+ * transaction upon abort of a nested transaction. This breaks
+ * composability.
+ */
+
 /* ################################################################### *
  * THREAD-LOCAL
  * ################################################################### */
 
+#ifdef TLS
+static __thread stm_tx_t* thread_tx;
+#else
 static pthread_key_t thread_tx;
+#endif
 
 /* ################################################################### *
  * LOCKS
@@ -149,12 +170,10 @@ static pthread_key_t thread_tx;
 #define LOCK_GET_ADDR(lock)             (lock & ~(stm_word_t)OWNED_MASK)
 #define LOCK_GET_INCARNATION(lock)      ((lock & INCARNATION_MASK) >> 1)
 #define LOCK_GET_TIMESTAMP(lock)        (lock >> 4)         /* Logical shift (unsigned) */
-#define LOCK_GET_VERSION(lock)          (lock >> 1)         /* Logical shift (unsigned) */
 #define LOCK_SET_ADDR_OWNED(a)          (a | OWNED_MASK)    /* WRITE bit set */
 #define LOCK_SET_TIMESTAMP(t)           (t << 4)            /* WRITE bit not set */
 #define LOCK_SET_INCARNATION(i)         (i << 1)            /* WRITE bit not set */
 #define LOCK_UPD_INCARNATION(lock, i)   ((lock & ~(stm_word_t)(INCARNATION_MASK | OWNED_MASK)) | LOCK_SET_INCARNATION(i))
-#define LOCK_SET_VERSION(t, i)          (LOCK_SET_TIMESTAMP(t) | LOCK_SET_INCARNATION(i))
 
 #define VERSION_MAX                     (~(stm_word_t)0 >> 4)
 
@@ -193,7 +212,7 @@ static volatile stm_word_t gclock;
 #ifdef ROLL_OVER_CLOCK
 /*
  * We use a simple approach for clock roll-over:
- *   We maintain the count of (active) transactions using a counter
+ * - We maintain the count of (active) transactions using a counter
  *   protected by a mutex. This approach is not very efficient but the
  *   cost is quickly amortized because we only modify the counter when
  *   creating and deleting a transaction descriptor, which typically
@@ -531,7 +550,11 @@ static void signal_catcher(int sig)
   /* A fault might only occur upon a load concurrent with a free (read-after-free) */
   PRINT_DEBUG("Caught signal: %d", sig);
 
+#ifdef TLS
+  tx = thread_tx;
+#else
   tx = (stm_tx_t *)pthread_getspecific(thread_tx);
+#endif
   if (tx == NULL || tx->jmp == NULL) {
     /* There is not much we can do: execution will restart at faulty load */
     fprintf(stderr, "Error: invalid memory accessed and no longjmp destination\n");
@@ -576,10 +599,12 @@ void stm_init(int flags)
   tx_overflow = 0;
 #endif
 
+#ifndef TLS
   if (pthread_key_create(&thread_tx, NULL) != 0) {
     fprintf(stderr, "Error creating thread local\n");
     exit(1);
   }
+#endif
 
   /* Catch signals for non-faulting load */
   if (signal(SIGBUS, signal_catcher) == SIG_ERR ||
@@ -596,7 +621,9 @@ void stm_exit(int flags)
 {
   PRINT_DEBUG("==> stm_exit(%d)\n", flags);
 
+#ifndef TLS
   pthread_key_delete(thread_tx);
+#endif
 }
 
 /*
@@ -604,30 +631,9 @@ void stm_exit(int flags)
  */
 void *stm_malloc(stm_tx_t *tx, size_t size)
 {
-  /* Memory will be freed upon abort */
-  mem_block_t *mb;
-
   PRINT_DEBUG2("==> stm_malloc(t=%p[%lu-%lu],s=%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, (int)size);
 
-  /* Round up size */
-  if (sizeof(stm_word_t) == 4) {
-    size = (size + 3) & ~(size_t)0x03;
-  } else {
-    size = (size + 7) & ~(size_t)0x07;
-  }
-
-  if ((mb = (mem_block_t *)malloc(sizeof(mem_block_t))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-  if ((mb->addr = malloc(size)) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-  mb->next = tx->allocated;
-  tx->allocated = mb;
-
-  return mb->addr;
+  return mem_alloc(tx->memory, size);
 }
 
 /*
@@ -635,47 +641,9 @@ void *stm_malloc(stm_tx_t *tx, size_t size)
  */
 void stm_free(stm_tx_t *tx, void *addr, size_t size)
 {
-  /* If memory was allocated using stm_malloc, it is freed immediately, otherwise upon commit */
-  mem_block_t *mb, *prev;
-  stm_word_t *a;
-
   PRINT_DEBUG2("==> stm_free(t=%p[%lu-%lu],a=%p,s=%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, (int)size);
 
-  /* Iterate through the list of allocated blocks (could use faster approach, e.g., hash map) */
-  mb = tx->allocated;
-  prev = NULL;
-  while (mb != NULL) {
-    if (mb->addr == addr) {
-      if (prev == NULL)
-        tx->allocated = mb->next;
-      else
-        prev->next = mb->next;
-      free(mb->addr);
-      free(mb);
-      return;
-    }
-    prev = mb;
-    mb = mb->next;
-  }
-  /* Not found: overwrite to prevent inconsistent reads */
-  if (sizeof(stm_word_t) == 4) {
-    size = (size + 3) >> 2;
-  } else {
-    size = (size + 7) >> 3;
-  }
-  a = (stm_word_t *)addr;
-  while (size-- > 0) {
-    /* Acquire lock and update version number */
-    stm_write(tx, a++, 0, 0);
-  }
-  /* Schedule for removal */
-  if ((mb = (mem_block_t *)malloc(sizeof(mem_block_t))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
-  mb->addr = addr;
-  mb->next = tx->freed;
-  tx->freed = mb;
+  mem_free(tx->memory, addr, size);
 }
 
 /*
@@ -815,6 +783,8 @@ stm_tx_t *stm_new(stm_tx_t *tx)
     perror("malloc");
     exit(1);
   }
+  /* Nesting level */
+  tx->nesting = 0;
   /* Transaction-specific data */
   tx->data = NULL;
 #ifdef STATS
@@ -822,10 +792,13 @@ stm_tx_t *stm_new(stm_tx_t *tx)
   tx->aborts = 0;
 #endif
   /* Memory */
-  tx->allocated = NULL;
-  tx->freed = NULL;
+  tx->memory = mem_new(tx);
   /* Store as thread-local data */
+#ifdef TLS
+  thread_tx = tx;
+#else
   pthread_setspecific(thread_tx, tx);
+#endif
 #ifdef ROLL_OVER_CLOCK
   stm_enter_tx(tx);
 #endif
@@ -845,6 +818,7 @@ void stm_delete(stm_tx_t *tx)
 #ifdef ROLL_OVER_CLOCK
   stm_exit_tx(tx);
 #endif
+  mem_delete(tx->memory);
   free(tx->r_set.entries);
   free(tx->w_set.entries);
   if (tx->must_free) {
@@ -857,7 +831,11 @@ void stm_delete(stm_tx_t *tx)
  */
 stm_tx_t *stm_get_tx()
 {
+#ifdef TLS
+  return thread_tx;
+#else
   return (stm_tx_t *)pthread_getspecific(thread_tx);
+#endif
 }
 
 /*
@@ -865,7 +843,8 @@ stm_tx_t *stm_get_tx()
  */
 sigjmp_buf *stm_get_env(stm_tx_t *tx)
 {
-  return &tx->env;
+  /* Only return environment for top-level transaction */
+  return tx->nesting == 0 ? &tx->env : NULL;
 }
 
 /*
@@ -874,6 +853,10 @@ sigjmp_buf *stm_get_env(stm_tx_t *tx)
 void stm_start(stm_tx_t *tx, sigjmp_buf *env, int *ro)
 {
   PRINT_DEBUG("==> stm_start(%p)\n", tx);
+
+  /* Increment nesting level */
+  if (tx->nesting++ > 0)
+    return;
 
   /* Use setjmp/longjmp? */
   tx->jmp = env;
@@ -908,12 +891,15 @@ int stm_commit(stm_tx_t *tx)
   w_entry_t *w;
   stm_word_t t;
   int i;
-  mem_block_t *mb, *next;
 
   PRINT_DEBUG("==> stm_commit(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 
   /* Check status */
   assert(tx->status == TX_ACTIVE);
+
+  /* Decrement nesting level */
+  if (--tx->nesting > 0)
+    return 1;
 
   if (tx->w_set.nb_entries > 0) {
     /* Update transaction */
@@ -963,28 +949,7 @@ int stm_commit(stm_tx_t *tx)
     }
   }
 
-  /* Keep memory allocated during transaction */
-  if (tx->allocated != NULL) {
-    mb = tx->allocated;
-    while (mb != NULL) {
-      next = mb->next;
-      free(mb);
-      mb = next;
-    }
-    tx->allocated = NULL;
-  }
-
-  /* Dispose of memory freed during transaction */
-  if (tx->freed != NULL) {
-    mb = tx->freed;
-    while (mb != NULL) {
-      next = mb->next;
-      free(mb->addr);
-      free(mb);
-      mb = next;
-    }
-    tx->freed = NULL;
-  }
+  mem_commit(tx->memory);
 
   /* Set status (no need for CAS or atomic op) */
   tx->status = TX_COMMITTED;
@@ -1000,7 +965,6 @@ void stm_abort(stm_tx_t *tx)
   w_entry_t *w;
   stm_word_t t;
   int inc;
-  mem_block_t *mb, *next;
 
   PRINT_DEBUG("==> stm_abort(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
 
@@ -1043,28 +1007,7 @@ void stm_abort(stm_tx_t *tx)
     }
   }
 
-  /* Dispose of memory allocated during transaction */
-  if (tx->allocated != NULL) {
-    mb = tx->allocated;
-    while (mb != NULL) {
-      next = mb->next;
-      free(mb->addr);
-      free(mb);
-      mb = next;
-    }
-    tx->allocated = NULL;
-  }
-
-  /* Keep memory freed during transaction */
-  if (tx->freed != NULL) {
-    mb = tx->freed;
-    while (mb != NULL) {
-      next = mb->next;
-      free(mb);
-      mb = next;
-    }
-    tx->freed = NULL;
-  }
+  mem_abort(tx->memory);
 
 #ifdef STATS
   tx->aborts++;
@@ -1072,6 +1015,9 @@ void stm_abort(stm_tx_t *tx)
 
   /* Set status (no need for CAS or atomic op) */
   tx->status = TX_ABORTED;
+
+  /* Reset nesting level */
+  tx->nesting = 0;
 }
 
 /*

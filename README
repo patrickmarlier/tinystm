@@ -26,8 +26,15 @@ TANGER. Alternatively, environment variables can be specified when
 invoking `make'.
 
 To compile TinySTM libraries, execute `make' in the main directory. To
-compile test applications, execute `make test'. To compile libraries for
-TANGER, execute `make tanger' or `make tanger TANGER_HOME=<path>'.
+compile test applications, execute `make test'.  To compile libraries
+for TANGER, execute `make tanger' or `make tanger TANGER_HOME=<path>'.
+
+NOTES:
+
+TinySTM includes wrappers for data types of various sizes.  These
+wrappers naturally assume that loads and stores are aligned w.r.t. the
+size of their respective data types (to access an n-bytes value, the
+corresponding address must be a multiple of n).
 
 CONTACT:
 

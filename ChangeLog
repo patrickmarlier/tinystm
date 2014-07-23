@@ -1,3 +1,14 @@
+[0.7.3 release]
+
+2007-11-02  Pascal Felber  <pascal.felber@unine.ch>
+	* Added minimal support for nested transactions (flat nesting).
+
+2007-10-30  Pascal Felber  <pascal.felber@unine.ch>
+	* Fixed bug in stm_free().
+	* Refactored part of the code.
+	* Added TLS support (Torvald Riegel).
+	* Various minor fixes.
+
 [0.7.2 release]
 
 2007-09-13  Pascal Felber  <pascal.felber@unine.ch>

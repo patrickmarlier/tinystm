@@ -1,6 +1,6 @@
 /*
  * File:
- *   test.c
+ *   types.c
  * Author(s):
  *   Pascal Felber <Pascal.Felber@unine.ch>
  * Description:
@@ -181,7 +181,8 @@ void test_loads(stm_tx_t *tx)
   sigjmp_buf *e;
 
   e = stm_get_env(tx);
-  sigsetjmp(*e, 0);
+  if (e != NULL)
+    sigsetjmp(*e, 0);
   stm_start(tx, e, NULL);
 
   if (verbose)
@@ -289,7 +290,8 @@ void test_stores(stm_tx_t *tx)
   sigjmp_buf *e;
 
   e = stm_get_env(tx);
-  sigsetjmp(*e, 0);
+  if (e != NULL)
+    sigsetjmp(*e, 0);
   stm_start(tx, e, NULL);
 
   if (verbose)
@@ -426,14 +428,26 @@ void *test(void *v)
 {
   stm_tx_t *tx;
   unsigned int seed;
+  int nested, store;
+  sigjmp_buf *e;
 
   seed = (unsigned int)time(0);
   tx = stm_new(NULL);
   while (stop == 0) {
-    if (rand_r(&seed) % 3 == 0)
+    nested = (rand_r(&seed) % 3 == 0);
+    store = (rand_r(&seed) % 3 == 0);
+    if (nested) {
+      e = stm_get_env(tx);
+      sigsetjmp(*e, 0);
+      stm_start(tx, e, NULL);
+    }
+    if (store)
       test_stores(tx);
     else
       test_loads(tx);
+    if (nested) {
+      stm_commit(tx);
+    }
   }
   stm_delete(tx);
 

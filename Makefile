@@ -6,6 +6,7 @@ LIBDIR = $(ROOT)/lib
 CFLAGS += -I$(SRCDIR)/src
 CFLAGS += -DSTATS
 CFLAGS += -DROLL_OVER_CLOCK
+CFLAGS += -DTLS
 
 # Choose write-back or write-through version
 VER = wb
@@ -27,7 +28,7 @@ tanger:	$(TLIBS)
 %.bc:	%.c
 	$(LLVMGCC) $(CFLAGS) -emit-llvm -c -o $@ $<
 
-$(LIBDIR)/libtstm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/wrappers.o
+$(LIBDIR)/libtstm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/memory.o $(SRCDIR)/wrappers.o
 	$(AR) cru $@ $^
 
 $(LIBDIR)/libtanger-stm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/wrappers.o $(SRCDIR)/tanger.o

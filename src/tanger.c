@@ -66,11 +66,11 @@ void tanger_stm_begin(tanger_stm_tx_t *tx)
 {
   jmp_buf *env;
 
-  if (stm_active((stm_tx_t *)tx)) {
+  env = stm_get_env((stm_tx_t *)tx);
+  if (env == NULL) {
     fprintf(stderr, "Nested transactions are not supported");
     exit(1);
   }
-  env = stm_get_env((stm_tx_t *)tx);
   stm_start((stm_tx_t *)tx, env, NULL);
 }
 
@@ -91,7 +91,14 @@ tanger_stm_tx_t *tanger_stm_get_tx()
 
 void *tanger_stm_get_jmpbuf(tanger_stm_tx_t *tx)
 {
-  return stm_get_env((stm_tx_t *)tx);
+  jmp_buf *env;
+
+  env = stm_get_env((stm_tx_t *)tx);
+  if (env == NULL) {
+    fprintf(stderr, "Nested transactions are not supported");
+    exit(1);
+  }
+  return env;
 }
 
 void *tanger_stm_get_stack_area(tanger_stm_tx_t *tx, void *low, void *high)

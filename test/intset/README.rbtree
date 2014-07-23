@@ -1,6 +1,7 @@
 The red-black tree implementation (rbtree.c, rbtree.h) comes from the
 STAMP 0.9.4 distribution available from <http://stamp.stanford.edu>.
-Files have not been modified in any way. Note that there may be warnings
-when compiling rbtree.c on a 64-bit architecture and there are some
-memory leaks (the red-black tree is not properely freed by the
-rbtree_free() function).
+Files have not been modified in any way besides enabling memory
+deallocation upon node release. Note that there may be warnings when
+compiling rbtree.c on a 64-bit architecture and there are some memory
+leaks (the red-black tree is not properely freed by the rbtree_free()
+function).

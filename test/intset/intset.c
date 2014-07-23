@@ -38,6 +38,11 @@
 /* Note: stdio is thread-safe */
 #endif
 
+/*
+ * Useful macros to work with transactions. Note that, to use nested
+ * transactions, one should check the environment returned by
+ * stm_get_env() and only call sigsetjmp() if it is not null.
+ */
 #define START                           { sigjmp_buf *_e = stm_get_env(tx); sigsetjmp(*_e, 0); stm_start(tx, _e, NULL)
 #define START_RO                        { int _ro = 1; sigjmp_buf *_e = stm_get_env(tx); sigsetjmp(*_e, 0); stm_start(tx, _e, &_ro)
 #define LOAD(addr)                      stm_load(tx, (stm_word_t *)addr)
@@ -244,7 +249,6 @@ int set_add(intset_t *set, int val, stm_tx_t *tx)
   int result;
   node_t *prev, *next;
   int v;
-  node_t *n;
 
 #ifdef DEBUG
   printf("++> set_add(%d)\n", val);
@@ -263,7 +267,6 @@ int set_add(intset_t *set, int val, stm_tx_t *tx)
       prev->next = new_node(val, next, tx);
     }
   } else {
-    n = NULL;
     START;
     prev = (node_t *)LOAD(&set->head);
     next = (node_t *)LOAD(&prev->next);
@@ -276,8 +279,7 @@ int set_add(intset_t *set, int val, stm_tx_t *tx)
     }
     result = (v != val);
     if (result) {
-      n = new_node(val, next, tx);
-      STORE(&prev->next, n);
+      STORE(&prev->next, new_node(val, next, tx));
     }
     COMMIT;
   }
