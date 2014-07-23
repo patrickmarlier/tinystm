@@ -5,7 +5,6 @@ ROOT = ../..
 
 all:	gcc
 
-# FIXME Move the include after the first rule! DO the same for all Makefile
 # ROOT must be defined to include Makefile.common
 include $(ROOT)/abi/Makefile.common
 

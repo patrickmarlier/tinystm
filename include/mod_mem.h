@@ -7,7 +7,7 @@
  * Description:
  *   Module for dynamic memory management.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,7 +31,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2010
+ *   2007-2011
  */
 
 #ifndef _MOD_MEM_H_
@@ -53,6 +53,19 @@ extern "C" {
  *   Pointer to the allocated memory block.
  */
 void *stm_malloc(TXPARAMS size_t size);
+
+/**
+ * Allocate initialized memory from inside a transaction.  Allocated 
+ * memory is implicitly freed upon abort.
+ *
+ * @param nm
+ *   Size of the array to allocate.
+ * @param size
+ *   Number of bytes to allocate.
+ * @return
+ *   Pointer to the allocated memory block.
+ */
+void *stm_calloc(TXPARAMS size_t nm, size_t size);
 
 /**
  * Free memory from inside a transaction.  Freed memory is only returned

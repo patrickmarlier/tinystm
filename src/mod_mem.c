@@ -7,7 +7,7 @@
  * Description:
  *   Module for dynamic memory management.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -70,6 +70,14 @@ void *stm_malloc(TXPARAMS size_t size)
   mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
   assert(mi != NULL);
 
+  /* ASF can abort anywhere => libc malloc is not safe for this */
+#ifdef HYDRID_ASF
+  if (stm_hybrid()) {
+    stm_set_software();
+    /* Unreachable point */
+  }
+#endif /* HYBRID_ASF */
+
   /* Round up size */
   if (sizeof(stm_word_t) == 4) {
     size = (size + 3) & ~(size_t)0x03;
@@ -82,6 +90,52 @@ void *stm_malloc(TXPARAMS size_t size)
     exit(1);
   }
   if ((mb->addr = malloc(size)) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+  mb->next = mi->allocated;
+  mi->allocated = mb;
+
+  return mb->addr;
+}
+
+/*
+ * Called by the CURRENT thread to allocate initialized memory within a transaction.
+ */
+void *stm_calloc(TXPARAMS size_t nm, size_t size)
+{
+  /* Memory will be freed upon abort */
+  mod_mem_info_t *mi;
+  mod_mem_block_t *mb;
+
+  if (!mod_mem_initialized) {
+    fprintf(stderr, "Module mod_mem not initialized\n");
+    exit(1);
+  }
+
+  mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
+  assert(mi != NULL);
+
+  /* ASF can abort anywhere => libc malloc is not safe for this */
+#ifdef HYDRID_ASF
+  if (stm_hybrid()) {
+    stm_set_software();
+    /* Unreachable point */
+  }
+#endif /* HYBRID_ASF */
+
+  /* Round up size */
+  if (sizeof(stm_word_t) == 4) {
+    size = (size + 3) & ~(size_t)0x03;
+  } else {
+    size = (size + 7) & ~(size_t)0x07;
+  }
+
+  if ((mb = (mod_mem_block_t *)malloc(sizeof(mod_mem_block_t))) == NULL) {
+    perror("malloc");
+    exit(1);
+  }
+  if ((mb->addr = calloc(nm, size)) == NULL) {
     perror("malloc");
     exit(1);
   }
@@ -116,6 +170,14 @@ void stm_free2(TXPARAMS void *addr, size_t idx, size_t size)
 
   mi = (mod_mem_info_t *)stm_get_specific(TXARGS mod_mem_key);
   assert(mi != NULL);
+
+  /* ASF can abort anywhere => libc malloc is not safe for this */
+#ifdef HYDRID_ASF
+  if (stm_hybrid()) {
+    stm_set_software();
+    /* Unreachable point */
+  }
+#endif /* HYBRID_ASF */
 
   /* TODO: if block allocated in same transaction => no need to overwrite */
   if (size > 0) {
@@ -259,7 +321,7 @@ void mod_mem_init(int gc)
   if (mod_mem_initialized)
     return;
 
-  stm_register(mod_mem_on_thread_init, mod_mem_on_thread_exit, NULL, mod_mem_on_commit, mod_mem_on_abort, NULL);
+  stm_register(mod_mem_on_thread_init, mod_mem_on_thread_exit, NULL, NULL, mod_mem_on_commit, mod_mem_on_abort, NULL);
   mod_mem_key = stm_create_specific();
   if (mod_mem_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");

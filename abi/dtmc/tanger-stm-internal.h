@@ -30,9 +30,9 @@ extern "C" {
 typedef void tanger_stm_tx_t;
 
 #ifndef TANGER_LOADSTORE_ATTR
-/* FIXME */
-#define TANGER_LOADSTORE_ATTR __attribute__((nothrow,always_inline))
-//#define TANGER_LOADSTORE_ATTR __attribute__((nothrow,noinline))
+/* FIXME: LLVM seems to have a bug when inlining these functions. Check if fixed with newer version. */
+//#define TANGER_LOADSTORE_ATTR __attribute__((nothrow,always_inline))
+#define TANGER_LOADSTORE_ATTR __attribute__((nothrow,noinline))
 #endif
 
 #if defined(__i386__)

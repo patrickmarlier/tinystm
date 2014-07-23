@@ -91,7 +91,7 @@ _ITM_beginTransaction:
 	call	GTM_begin_transaction
 #else
 	leal	4(%esp), %ecx
-	subl	$28, %esp         /* Reserve save on the stack */
+	subl	$28, %esp         /* Reserve space on the stack */
 	.cfi_def_cfa_offset 32
 	movl	%ecx, 8(%esp)
 	movl	%ebx, 12(%esp)    /* Save registers */

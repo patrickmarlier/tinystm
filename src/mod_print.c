@@ -7,7 +7,7 @@
  * Description:
  *   Module to test callbacks.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -52,6 +52,15 @@ static void mod_print_on_start(TXPARAMS void *arg)
 }
 
 /*
+ * Called before transaction try to commit.
+ */
+static void mod_print_on_precommit(TXPARAMS void *arg)
+{
+  printf("==> on_precommit()\n");
+  fflush(NULL);
+}
+
+/*
  * Called upon transaction commit.
  */
 static void mod_print_on_commit(TXPARAMS void *arg)
@@ -74,5 +83,5 @@ static void mod_print_on_abort(TXPARAMS void *arg)
  */
 void mod_print_init()
 {
-  stm_register(mod_print_on_thread_init, mod_print_on_thread_exit, mod_print_on_start, mod_print_on_commit, mod_print_on_abort, NULL);
+  stm_register(mod_print_on_thread_init, mod_print_on_thread_exit, mod_print_on_start, mod_print_on_precommit, mod_print_on_commit, mod_print_on_abort, NULL);
 }

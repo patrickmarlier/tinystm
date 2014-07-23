@@ -40,12 +40,12 @@ libitm.so: 	abi.do arch.o
 ##############################################################################
 
 TESTCC       ?= $(CC)
-TESTCFLAGS   += -DTM_GCC -fgnu-tm
-TESTLD       ?= $(CC)
+TESTCFLAGS   += $(CFLAGS) -DTM_GCC -fgnu-tm
+TESTLD       ?= $(LD)
 TESTLDFLAGS  += -Wl,-rpath=$(shell pwd)
 TESTLDFLAGS  += -L$(ROOT)/abi/gcc 
-TESTLDFLAGS  += -litm
+TESTLDFLAGS  += -static -litm
 
-clean: 	intset-clean
+clean: 	intset-clean intsetasf-clean
 	rm -f *.o *.do libitm.a libitm.so
 

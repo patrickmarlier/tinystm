@@ -3,10 +3,11 @@
  *   abi.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   ABI for tinySTM.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,20 +23,21 @@
 #include <alloca.h>
 #include <assert.h>
 #include <string.h>
-
 #include <stdbool.h>
+#include <pthread.h>
 #ifdef __SSE__
 #include <xmmintrin.h>
 #endif /* __SSE__ */
 
-#include <pthread.h>
-
 #include "abi.h"
 
 #ifndef FUNC_ATTR
-#define FUNC_ATTR(STR) inline STR __attribute__((always_inline))
-//#define FUNC_ATTR(STR) STR __attribute__((noinline))
+//#define FUNC_ATTR(STR) inline STR __attribute__((always_inline))
+#define FUNC_ATTR(STR) STR __attribute__((noinline))
 #endif
+
+/* FIXME STACK_CHECK: DTMC and GCC can use ITM_W to write on stack variable */
+/* TODO STACK_CHECK: to finish and test */
 
 #include "stm.h"
 #include "atomic.h"
@@ -46,14 +48,18 @@
 #include "wrappers.h"
 #ifdef TM_DTMC
 #include "dtmc/tanger-stm-internal.h"
+#include "dtmc/tanger.h"
 #endif
 
 /* TODO undef siglongjmp at the end or do a better workaround */
 #define siglongjmp _ITM_siglongjmp
-extern void _ITM_siglongjmp(sigjmp_buf env, int val) __attribute__ ((noreturn));
+extern void _ITM_CALL_CONVENTION _ITM_siglongjmp(sigjmp_buf env, int val) __attribute__ ((noreturn));
 
 #include "stm.c"
 #include "mod_mem.c"
+#ifdef TM_GCC
+#include "gcc/alloc_cpp.c"
+#endif
 #include "mod_log.c"
 #include "mod_cb.c"
 #include "mod_stats.c"
@@ -61,17 +67,12 @@ extern void _ITM_siglongjmp(sigjmp_buf env, int val) __attribute__ ((noreturn));
 #ifdef EPOCH_GC
 #include "gc.c"
 #endif
-#ifdef TM_DTMC
-#include "dtmc/tanger.c"
-#endif
 
 /* pthread wrapper */
-/* TODO add define to be optional */
 #ifdef PTHREAD_WRAPPER
 # include "pthread_wrapper.h"
 #endif /* PTHREAD_WRAPPER */
 
-/* FIXME a_restoreLiveVariables must be set in longjmp */
 #ifdef HYBRID_ASF
 # define TM_START    tm_start
 # define TM_COMMIT   tm_commit
@@ -83,27 +84,8 @@ extern void _ITM_siglongjmp(sigjmp_buf env, int val) __attribute__ ((noreturn));
 #endif /* ! HYBRID_ASF */ 
 
 /* ################################################################### *
- * COMPATIBILITY FUNCTIONS
+ * VARIABLES
  * ################################################################### */
-#if defined(__APPLE__)
-/* OS X */
-# include <malloc/malloc.h>
-inline size_t block_size(void *ptr)
-{
-  return malloc_size(ptr);
-}
-#elif defined(__linux__) || defined(__CYGWIN__)
-/* Linux, WIN32 (CYGWIN) */
-# include <malloc.h>
-inline size_t block_size(void *ptr)
-{
-  return malloc_usable_size(ptr);
-}
-#else /* ! (defined(__APPLE__) || defined(__linux__) || defined(__CYGWIN__)) */
-# error "Target OS does not provide size of allocated blocks"
-#endif /* ! (defined(__APPLE__) || defined(__linux__) || defined(__CYGWIN__)) */
-
-
 /* Status of the ABI */
 enum {
   ABI_NOT_INITIALIZED,
@@ -112,15 +94,24 @@ enum {
   ABI_FINALIZING,
 };
 /* TODO need padding and alignment */
-static unsigned long abi_status = ABI_NOT_INITIALIZED;
+static volatile unsigned long abi_status = ABI_NOT_INITIALIZED;
 
 /* TODO need padding and alignment */
-static long thread_counter = 0;
+static volatile long thread_counter = 0;
+
+typedef struct {
+  int thread_id;
+#ifdef STACK_CHECK
+/* XXX STACK_CHECK could be moved to stm.c */
+  void *stack_addr_low;
+  void *stack_addr_high;
+#endif /* STACK_CHECK */
+} thread_abi_t;
 
 #ifdef TLS
-static __thread int thread_id = -1;
+static __thread thread_abi_t *thread_abi = NULL;
 #else /* ! TLS */
-static pthread_key_t thread_id;
+static pthread_key_t thread_abi;
 #endif /* ! TLS */
 
 /* Statistics */
@@ -142,6 +133,89 @@ typedef struct stats {
 /* TODO align + padding */
 stats_t * thread_stats = NULL;
 
+
+/* ################################################################### *
+ * COMPATIBILITY FUNCTIONS
+ * ################################################################### */
+#ifdef STACK_CHECK
+static int get_stack_attr(void *low, void *high)
+{
+  /* GNU Pthread specific */
+  pthread_attr_t attr;
+  uintptr_t stackaddr;
+  size_t stacksize;
+  if (pthread_getattr_np(pthread_self(), &attr)) {
+    return 1;
+  }
+  if (pthread_attr_getstack(&attr, (void *)&stackaddr, &stacksize)) {
+    return 1;
+  }
+  *(uintptr_t *)low = stackaddr;
+  *(uintptr_t *)high = stackaddr + stacksize;
+
+  return 0;
+}
+/* Hints for other platforms
+#if PLATFORM(DARWIN) 
+pthread_get_stackaddr_np(pthread_self()); 
+#endif
+#elif PLATFORM(WIN_OS) && PLATFORM(X86) && COMPILER(MSVC) 
+// offset 0x18 from the FS segment register gives a pointer to 
+// the thread information block for the current thread 
+NT_TIB* pTib; 
+__asm { 
+MOV EAX, FS:[18h] 
+MOV pTib, EAX 
+} 
+return (void*)pTib->StackBase; 
+#elif PLATFORM(WIN_OS) && PLATFORM(X86_64) && COMPILER(MSVC) 
+PNT_TIB64 pTib = reinterpret_cast<PNT_TIB64>(NtCurrentTeb()); 
+return (void*)pTib->StackBase; 
+#elif PLATFORM(WIN_OS) && PLATFORM(X86) && COMPILER(GCC) 
+// offset 0x18 from the FS segment register gives a pointer to 
+// the thread information block for the current thread 
+NT_TIB* pTib; 
+asm ( "movl %%fs:0x18, %0\n" 
+: "=r" (pTib) 
+); 
+return (void*)pTib->StackBase; 
+#endif
+*/
+static inline int on_stack(void *a)
+{
+#ifdef TLS
+  thread_abi_t *t = thread_abi;
+#else /* ! TLS */
+  thread_abi_t *t = pthread_getspecific(thread_abi);
+#endif /* ! TLS */
+  if ((t->stack_addr_low <= (uintptr_t)a) && ((uintptr_t)a < t->stack_addr_high)) { 
+    return 1;
+  } 
+  return 0;
+}
+#endif /* STACK_CHECK */
+
+
+#if defined(__APPLE__)
+/* OS X */
+# include <malloc/malloc.h>
+inline size_t block_size(void *ptr)
+{
+  return malloc_size(ptr);
+}
+#elif defined(__linux__) || defined(__CYGWIN__)
+/* Linux, WIN32 (CYGWIN) */
+# include <malloc.h>
+inline size_t block_size(void *ptr)
+{
+  return malloc_usable_size(ptr);
+}
+#else /* ! (defined(__APPLE__) || defined(__linux__) || defined(__CYGWIN__)) */
+# error "Target OS does not provide size of allocated blocks"
+#endif /* ! (defined(__APPLE__) || defined(__linux__) || defined(__CYGWIN__)) */
+
+
+
 /* ################################################################### *
  * FUNCTIONS
  * ################################################################### */
@@ -149,8 +223,7 @@ stats_t * thread_stats = NULL;
 _ITM_transaction * _ITM_CALL_CONVENTION _ITM_getTransaction(void)
 {
   struct stm_tx *tx = stm_current_tx();
-  /* TODO add unlikely and check also place it is missing */
-  if (tx == NULL) {
+  if (unlikely(tx == NULL)) {
     /* Thread not initialized: must create transaction */
     _ITM_initializeThread();
     tx = stm_current_tx();
@@ -171,9 +244,9 @@ _ITM_howExecuting _ITM_CALL_CONVENTION _ITM_inTransaction(TX_ARG1)
 int _ITM_CALL_CONVENTION _ITM_getThreadnum(void)
 {
 #ifdef TLS
-  return thread_id;
+  return thread_abi->thread_id;
 #else /* ! TLS */
-  return (int)pthread_getspecific(thread_id);
+  return ((thread_abi_t *)pthread_getspecific(thread_abi))->thread_id;
 #endif /* ! TLS */
 }
 
@@ -217,7 +290,7 @@ void _ITM_CALL_CONVENTION _ITM_userError(const char *errString, int exitCode)
   exit(exitCode);
 }
 
-void * _ITM_CALL_CONVENTION _ITM_malloc(size_t size)
+void * _ITM_malloc(size_t size)
 {
 #ifdef EXPLICIT_TX_PARAMETER
   stm_tx_t *tx = stm_current_tx();
@@ -231,7 +304,21 @@ void * _ITM_CALL_CONVENTION _ITM_malloc(size_t size)
 #endif
 }
 
-void _ITM_CALL_CONVENTION _ITM_free(void *ptr)
+void * _ITM_calloc(size_t nm, size_t size)
+{
+#ifdef EXPLICIT_TX_PARAMETER
+  stm_tx_t *tx = stm_current_tx();
+  if (tx == NULL || !stm_active(tx))
+    return calloc(nm, size);
+  return stm_calloc(tx, nm, size);
+#else
+  if (!stm_active())
+    return calloc(nm, size);
+  return stm_calloc(nm, size);
+#endif
+}
+
+void _ITM_free(void *ptr)
 {
 #ifdef EXPLICIT_TX_PARAMETER
   stm_tx_t *tx = stm_current_tx();
@@ -259,7 +346,7 @@ void _ITM_CALL_CONVENTION _ITM_free(void *ptr)
 
 const char * _ITM_CALL_CONVENTION _ITM_libraryVersion(void)
 {
-  return _ITM_VERSION_NO_STR " (TinySTM " STM_VERSION ")";
+  return _ITM_VERSION_NO_STR " using TinySTM " STM_VERSION "";
 }
 
 int _ITM_CALL_CONVENTION _ITM_versionCompatible(int version)
@@ -272,16 +359,19 @@ int _ITM_CALL_CONVENTION _ITM_initializeThread(void)
   /* Make sure that the main initilization is done */
   _ITM_initializeProcess();
 #ifdef TLS
-  if (thread_id == -1) {
-    thread_id = (int)ATOMIC_FETCH_INC_FULL(&thread_counter);
+  if (thread_abi == NULL) {
+    thread_abi_t * t = malloc(sizeof(thread_abi));
+    thread_abi = t;
 #else /* ! TLS */
-  if ((int)pthread_getspecific(thread_id) == -1) {
-    pthread_setspecific(thread_id, (void *)ATOMIC_FETCH_INC_FULL(&thread_counter));
+  if (pthread_getspecific(thread_abi) == NULL) {
+    thread_abi_t *t = malloc(sizeof(thread_abi));
+    pthread_setspecific(thread_abi, t);
 #endif /* ! TLS */
-  stm_init_thread();
-#ifdef TM_DTMC
-    tanger_stm_threadstack_init();
-#endif
+    t->thread_id = (int)ATOMIC_FETCH_INC_FULL(&thread_counter);
+    stm_init_thread();
+#ifdef STACK_CHECK
+    get_stack_attr(&t->stack_addr_low, &t->stack_addr_high);
+#endif /* STACK_CHECK */
   }
   return 0;
 }
@@ -294,7 +384,12 @@ void _ITM_CALL_CONVENTION _ITM_finalizeThread(void)
     return;
   if (getenv("ITM_STATISTICS") != NULL) {
     stats_t * ts = malloc(sizeof(stats_t));
-    ts->thread_id = thread_id;
+#ifdef TLS
+    thread_abi_t *t = thread_abi;
+#else /* ! TLS */
+    thread_abi_t *t = pthread_getspecific(thread_abi);
+#endif /* ! TLS */
+    ts->thread_id = t->thread_id;
     stm_get_local_stats(TX_ARGS2 "nb_commits", &ts->nb_commits);
     stm_get_local_stats(TX_ARGS2 "nb_aborts", &ts->nb_aborts);
     stm_get_local_stats(TX_ARGS2 "nb_retries_avg", &ts->nb_retries_avg);
@@ -304,13 +399,23 @@ void _ITM_CALL_CONVENTION _ITM_finalizeThread(void)
     do {
 	ts->next = (stats_t *)ATOMIC_LOAD(&thread_stats);
     } while (ATOMIC_CAS_FULL(&thread_stats, ts->next, ts) == 0);
+    /* ts will be freed on _ITM_finalizeProcess. */
+#ifdef TLS
+    thread_abi = NULL;
+#else /* ! TLS */
+    pthread_setspecific(thread_abi, NULL);
+#endif
+    /* Free thread_abi_t structure. */
+    free(t);
   }
 
   stm_exit_thread(TX_ARG2);
 
 #ifdef TM_DTMC
-  tanger_stm_threadstack_fini();
+  /* Free the saved stack */
+  tanger_stm_free_stack();
 #endif
+
 }
 
 #ifdef __PIC__
@@ -361,8 +466,10 @@ reload:
         continue;
       fprintf(f, "Thread %-4i                : %12s %12s %12s %12s\n", i, "Min", "Mean", "Max", "Total");
       fprintf(f, "  Transactions             : %12lu\n", ts->nb_commits);
-      fprintf(f, "  %-25s: %12lu %12.2f %12lu %12lu\n", "Retries", ts->nb_retries_min, ts->nb_retries_avg, ts->nb_retries_max, ts->nb_aborts );
+      fprintf(f, "  %-25s: %12lu %12.2f %12lu %12lu\n", "Retries", ts->nb_retries_min, ts->nb_retries_avg, ts->nb_retries_max, ts->nb_aborts);
       fprintf(f,"\n");
+      /* Free the thread stats structure */
+      free(ts);
       i++;
     }
 no_more_stat:
@@ -372,13 +479,11 @@ no_more_stat:
   }
 finishing:
 #ifndef TLS
-  pthread_key_delete(thread_id);
-#endif /* ! TLS */
+  pthread_key_delete(thread_abi);
+#else /* TLS */
+  thread_abi = NULL;
+#endif /* TLS */
   stm_exit();
-
-#ifdef TM_DTMC
-  tanger_stm_stack_fini();
-#endif
 
   ATOMIC_STORE(&abi_status, ABI_NOT_INITIALIZED);
 }
@@ -390,21 +495,22 @@ reload:
   if (ATOMIC_LOAD_ACQ(&abi_status) == ABI_NOT_INITIALIZED) {
     if (ATOMIC_CAS_FULL(&abi_status, ABI_NOT_INITIALIZED, ABI_INITIALIZING) != 0) {
       /* TODO temporary to be sure to use tinySTM */
-      printf("TinySTM powered version %s.\n", _ITM_libraryVersion());
+      printf("TinySTM-ABI v%s.\n", _ITM_libraryVersion());
       atexit((void (*)(void))(_ITM_finalizeProcess));
 
       /* TinySTM initialization */
       stm_init();
       mod_mem_init(0);
-#ifdef TM_DTMC
-      tanger_stm_stack_init();
-#endif
+# ifdef TM_GCC
+      mod_alloc_cpp();
+# endif /* TM_GCC */
       mod_log_init();
+      mod_cb_init();
       if (getenv("ITM_STATISTICS") != NULL) {
         mod_stats_init();
       }
 #ifndef TLS
-      if (pthread_key_create(&thread_id, NULL) != 0) {
+      if (pthread_key_create(&thread_abi, NULL) != 0) {
         fprintf(stderr, "Error creating thread local\n");
         exit(1);
       }
@@ -449,25 +555,25 @@ uint32_t _ITM_CALL_CONVENTION GTM_begin_transaction(TX_ARGS1 uint32_t attr, sigj
 #ifndef EXPLICIT_TX_PARAMETER
   sigjmp_buf * env;
 #endif /* ! EXPLICIT_TX_PARAMETER */
-  /* FIXME:  This variable is in the stack and could be modified during 
-   * transaction (we are leaving this frame).
-   * But now the stm_start function copies attributes and not only pointer.
-   * (thread local could be also possible) */
+  /* This variable is in the stack but stm_start copies the content. */
   stm_tx_attr_t _a = {0,0,0,0,0};
 
 #ifndef EXPLICIT_TX_PARAMETER
-  if( stm_current_tx() == NULL ) {
+  if (unlikely(stm_current_tx() == NULL)) {
     _ITM_initializeThread();
   }
 #endif
 
-  /* DTMC doesn't give the attr with pr_instrumentedCode */
-#ifndef TM_DTMC
+#ifdef TM_DTMC
+  /* DTMC prior or equal to Velox R3 did not use regparm(2) with x86-32. */
+  /* TODO to be removed when new release of DTMC fix it. */
+  attr = 3;
+  ret = a_runInstrumentedCode;
+#else /* !TM_DTMC */
   /* Manage attribute for the transaction */
   if ((attr & pr_doesGoIrrevocable) || !(attr & pr_instrumentedCode))
   {
-    /* FIXME Add an attribute to specify irrevocable TX */
-    /* FIXME TinySTM: The problem could be that the tx is not yet started? or? */
+    /* TODO Add an attribute to specify irrevocable TX */
     stm_set_irrevocable(TX_ARGS2 1);
     ret = a_runUninstrumentedCode;
     if ((attr & pr_multiwayCode) == pr_instrumentedCode)
@@ -483,32 +589,32 @@ uint32_t _ITM_CALL_CONVENTION GTM_begin_transaction(TX_ARGS1 uint32_t attr, sigj
 
     ret = a_runInstrumentedCode | a_saveLiveVariables;
   }
-#else /* defined(TM_DTMC) */
-  /* DTMC wants 1 (DTMC doesn't compare bitwise) */
-  ret = 1;
-#endif /* defined(TM_DTMC) */
+#endif /* !TM_DTMC */
 
+#ifdef TM_DTMC
+  /* if (ret & a_runInstrumentedCode) */
+  tanger_stm_save_stack();
+#endif /* TM_DTMC */
+
+#ifdef EXPLICIT_TX_PARAMETER
+  TM_START(TX_ARGS2 &_a);
+#else /* ! EXPLICIT_TX_PARAMETER */
   env = TM_START(TX_ARGS2 &_a);
-#ifndef EXPLICIT_TX_PARAMETER
   /* Save thread context to retry (Already copied in case of EXPLICIT_TX_PARAMETER, see _ITM_beginTransaction) */
   if (env != NULL)
     memcpy(env, buf, sizeof(sigjmp_buf));
-#endif
-
-#ifdef TM_DTMC
-  tanger_stm_stack_savehack();
-  return 1;
-#else
+#endif /* ! EXPLICIT_TX_PARAMETER */
 
   return ret;
-#endif
-
 }
 
 void _ITM_CALL_CONVENTION _ITM_commitTransaction(TX_ARGS1
                             const _ITM_srcLocation *__src)
 {
   TM_COMMIT(TX_ARG2);
+#ifdef TM_DTMC
+  tanger_stm_reset_stack();
+#endif /* TM_DTMC */
 }
 
 bool _ITM_CALL_CONVENTION _ITM_tryCommitTransaction(TX_ARGS1
@@ -566,6 +672,7 @@ void _ITM_CALL_CONVENTION _ITM_changeTransactionMode(TX_ARGS1
   switch (__mode) {
     case modeSerialIrrevocable:
       stm_set_irrevocable(TX_ARGS2 1);
+      /* TODO a_runUninstrumentedCode must be set at rollback! */
       break;
     case modeObstinate:
     case modeOptimistic:
@@ -578,12 +685,20 @@ void _ITM_CALL_CONVENTION _ITM_changeTransactionMode(TX_ARGS1
 /**** TM GCC Specific ****/
 #ifdef TM_GCC
 #include "gcc/clone.c"
+#include "gcc/eh.c"
+
+/* TODO This function is not fully compatible, need to delete exception on abort. */
+void _ITM_CALL_CONVENTION _ITM_commitTransactionEH(TX_ARGS1
+                            void *exc_ptr)
+{
+  TM_COMMIT(TX_ARG2);
+}
+
 #endif /* TM_GCC */
 
 
 /**** LOAD STORE LOG FUNCTIONS ****/
 
-/* FIXME Hybrid need to new wrappers */
 #define TM_LOAD(F, T, WF, WT) \
   T _ITM_CALL_CONVENTION F(TX_ARGS1 const T *addr) \
   { \
@@ -598,11 +713,25 @@ void _ITM_CALL_CONVENTION _ITM_changeTransactionMode(TX_ARGS1
     return c.d; \
   }
 
+/* TODO if WRITE_BACK/ALL?, write to stack must be saved and written directly
+ * TODO must use stm_log is addresses are under the beginTransaction
+  if (on_stack(addr)) { stm_log_u64(addr); *addr = val; } 
+not enough because if we abort and restore -> stack can be corrupted
+*/
+#ifdef STACK_CHECK
+#define TM_STORE(F, T, WF, WT) \
+  void _ITM_CALL_CONVENTION F(TX_ARGS1 const T *addr, T val) \
+  { \
+    if (on_stack(addr)) *((T*)addr) = val; \
+    else WF(TX_ARGS2 (volatile WT *)addr, (WT)val); \
+  }
+#else /* !STACK_CHECK */
 #define TM_STORE(F, T, WF, WT) \
   void _ITM_CALL_CONVENTION F(TX_ARGS1 const T *addr, T val) \
   { \
     WF(TX_ARGS2 (volatile WT *)addr, (WT)val); \
   }
+#endif /* !STACK_CHECK */
 
 #define TM_STORE_GENERIC(F, T) \
   void _ITM_CALL_CONVENTION F(TX_ARGS1 const T *addr, T val) \
@@ -642,12 +771,32 @@ void _ITM_CALL_CONVENTION _ITM_changeTransactionMode(TX_ARGS1
     stm_log_bytes(TX_ARGS2 (uint8_t *)addr, size); \
   }
 
+#ifdef STACK_CHECK
+#define TM_SET_BYTES(F) \
+  void _ITM_CALL_CONVENTION F(TX_ARGS1 void *dst, int val, size_t count) \
+  { \
+    if (on_stack(dst)) memset(dst, val, count); \
+    else stm_set_bytes(TX_ARGS2 (volatile uint8_t *)dst, val, count); \
+  }
+#else /* !STACK_CHECK */
 #define TM_SET_BYTES(F) \
   void _ITM_CALL_CONVENTION F(TX_ARGS1 void *dst, int val, size_t count) \
   { \
     stm_set_bytes(TX_ARGS2 (volatile uint8_t *)dst, val, count); \
   }
+#endif /* !STACK_CHECK */
 
+#ifdef STACK_CHECK
+#define TM_COPY_BYTES(F) \
+  void _ITM_CALL_CONVENTION F(TX_ARGS1 void *dst, const void *src, size_t size) \
+  { \
+    uint8_t *buf = (uint8_t *)alloca(size); \
+    if (on_stack(src)) memcpy(buf, src, size); \
+    stm_load_bytes(TX_ARGS2 (volatile uint8_t *)src, buf, size); \
+    if (on_stack(dst)) memcpy(dst, buf, size); \
+    else stm_store_bytes(TX_ARGS2 (volatile uint8_t *)dst, buf, size); \
+  }
+#else /* !STACK_CHECK */
 #define TM_COPY_BYTES(F) \
   void _ITM_CALL_CONVENTION F(TX_ARGS1 void *dst, const void *src, size_t size) \
   { \
@@ -655,6 +804,7 @@ void _ITM_CALL_CONVENTION _ITM_changeTransactionMode(TX_ARGS1
     stm_load_bytes(TX_ARGS2 (volatile uint8_t *)src, buf, size); \
     stm_store_bytes(TX_ARGS2 (volatile uint8_t *)dst, buf, size); \
   }
+#endif /* !STACK_CHECK */
 
 #define TM_COPY_BYTES_RN_WT(F) \
   void _ITM_CALL_CONVENTION F(TX_ARGS1 void *dst, const void *src, size_t size) \
@@ -780,4 +930,11 @@ TM_COPY_BYTES(_ITM_memmoveRtaRWtaW)
 TM_COPY_BYTES(_ITM_memmoveRtaWWt)
 TM_COPY_BYTES(_ITM_memmoveRtaWWtaR)
 TM_COPY_BYTES(_ITM_memmoveRtaWWtaW)
+
+#ifdef TM_DTMC
+/* DTMC file uses this macro name for other thing */
+# undef TM_LOAD
+# undef TM_STORE
+# include "dtmc/tanger.c"
+#endif
 

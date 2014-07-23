@@ -7,7 +7,7 @@
  * Description:
  *   STM functions.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -35,8 +35,18 @@
 
 #ifdef HYBRID_ASF
 # include "asf/asf-highlevel.h"
+/* Abort status */
+# define ASF_RETRY                       (0)
+# define ASF_FORCE_SOFTWARE              (1)
+# define ASF_RETRY_IRREVOCABLE           (2)
 /* Number of hybrid tx aborts before to switch to pure software transaction */
 # define ASF_ABORT_THRESHOLD             (16)
+/* Force lock shift to 0, otherwise a large area will be locked */
+# ifdef LOCK_SHIFT_EXTRA 
+#  warning LOCK_SHIFT_EXTRA is ignored with HYBRID_ASF
+#  undef LOCK_SHIFT_EXTRA
+# endif /* LOCK_SHIFT_EXTRA */
+# define LOCK_SHIFT_EXTRA                (0)
 #endif /* HYBRID_ASF */
 
 /* ################################################################### *
@@ -379,12 +389,14 @@ static volatile stm_word_t irrevocable = 0;
 static cb_entry_t init_cb[MAX_CB];      /* Init thread callbacks */
 static cb_entry_t exit_cb[MAX_CB];      /* Exit thread callbacks */
 static cb_entry_t start_cb[MAX_CB];     /* Start callbacks */
+static cb_entry_t precommit_cb[MAX_CB]; /* Commit callbacks */
 static cb_entry_t commit_cb[MAX_CB];    /* Commit callbacks */
 static cb_entry_t abort_cb[MAX_CB];     /* Abort callbacks */
 
 static int nb_init_cb = 0;
 static int nb_exit_cb = 0;
 static int nb_start_cb = 0;
+static int nb_precommit_cb = 0;
 static int nb_commit_cb = 0;
 static int nb_abort_cb = 0;
 
@@ -739,6 +751,7 @@ static inline int stm_quiesce(stm_tx_t *tx, int block)
 
   PRINT_DEBUG("==> stm_quiesce(%p)\n", tx);
 
+  /* TODO ASF doesn't support pthread_mutex_* since it may require syscall. */
   if (IS_ACTIVE(tx->status)) {
     /* Only one active transaction can quiesce at a time, others must abort */
     if (pthread_mutex_trylock(&quiesce_mutex) != 0)
@@ -1071,7 +1084,7 @@ static inline int stm_kill(stm_tx_t *tx, stm_tx_t *other, stm_word_t status)
   if (GET_STATUS(status) == TX_IRREVOCABLE)
     return 0;
 # endif /* IRREVOCABLE_ENABLED */
-  if (GET_STATUS(status) == TX_ABORTED || GET_STATUS(status) == TX_COMMITTED || GET_STATUS(status) == TX_KILLED)
+  if (GET_STATUS(status) == TX_ABORTED || GET_STATUS(status) == TX_COMMITTED || GET_STATUS(status) == TX_KILLED || GET_STATUS(status) == TX_IDLE)
     return 0;
   if (GET_STATUS(status) == TX_ABORTING || GET_STATUS(status) == TX_COMMITTING) {
     /* Transaction is already aborting or committing: wait */
@@ -1090,7 +1103,7 @@ static inline int stm_kill(stm_tx_t *tx, stm_tx_t *other, stm_word_t status)
       if (GET_STATUS(t) == TX_IRREVOCABLE)
         return 0;
 # endif /* IRREVOCABLE_ENABLED */
-    } while (GET_STATUS(t) != TX_ABORTED && GET_STATUS(t) != TX_COMMITTED && GET_STATUS(t) != TX_KILLED && GET_STATUS_COUNTER(t) == c);
+    } while (GET_STATUS(t) != TX_ABORTED && GET_STATUS(t) != TX_COMMITTED && GET_STATUS(t) != TX_KILLED && GET_STATUS(t) != TX_IDLE && GET_STATUS_COUNTER(t) == c);
     return 0;
   }
   /* We have killed the transaction: we can steal the lock */
@@ -1301,18 +1314,18 @@ static inline void stm_rollback(stm_tx_t *tx, int reason)
     tx->max_retries = tx->retries;
 #endif /* INTERNAL_STATS */
 
+  /* Set status to ABORTED */
+  SET_STATUS(tx->status, TX_ABORTED);
+
+  /* Reset nesting level */
+  tx->nesting = 1;
+
   /* Callbacks */
   if (nb_abort_cb != 0) {
     int cb;
     for (cb = 0; cb < nb_abort_cb; cb++)
       abort_cb[cb].f(TXARGS abort_cb[cb].arg);
   }
-
-  /* Set status to ABORTED */
-  SET_STATUS(tx->status, TX_ABORTED);
-
-  /* Reset nesting level */
-  tx->nesting = 1;
 
 #if CM == CM_BACKOFF
   /* Simple RNG (good enough for backoff) */
@@ -1340,20 +1353,28 @@ static inline void stm_rollback(stm_tx_t *tx, int reason)
   }
 #endif /* CM == CM_DELAY || CM == CM_MODULAR */
 
+  /* TODO: what is the expected behavior of STM_ABORT_EXPLICIT? */
+  /* Don't prepare a new transaction if no retry. */
+  if (tx->attr.no_retry || (reason & STM_ABORT_EXPLICIT) != 0) {
+    tx->nesting = 0;
+    return;
+  }
+    
   /* Reset field to restart transaction */
   stm_prepare(tx);
 
-#ifdef TM_DTMC
-  tanger_stm_stack_restorehack();
-#endif /* TM_DTMC */
   /* Jump back to transaction start */
-  /* TODO : to test because I changed value of reason */
-  if (!tx->attr.no_retry)
+  /* FIXME: not proper at all. it has to be changed. The value must be the one specified by the function. */
 #if defined(TM_DTMC)
-    siglongjmp(tx->env, 0x01); /* ABI 0x01 = runInstrumented, DTMC explicitly needs 1 */
-#else /* ! defined(TM_DTMC) */
-    siglongjmp(tx->env, 0x09 | reason); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
-#endif /* ! defined(TM_DTMC) */
+  /* Restore stack */
+  tanger_stm_restore_stack();
+  /* TODO if irrevocable + DTMC, can run uninstrumented */
+#endif /* defined(TM_DTMC) */
+#if defined(TM_DTMC) || defined(TM_GCC) || defined (TM_INTEL)
+  siglongjmp(tx->env, 0x09); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
+#else /* !defined(TM_DTMC) && !defined(TM_GCC) && !defined (TM_INTEL) */
+  siglongjmp(tx->env, reason);
+#endif /* !defined(TM_DTMC) && !defined(TM_GCC) && !defined (TM_INTEL) */
 }
 
 /*
@@ -1450,6 +1471,10 @@ static inline stm_word_t stm_read_invisible(stm_tx_t *tx, volatile stm_word_t *a
     goto restart;
 #else /* DESIGN != WRITE_BACK_CTL */
     /* Conflict: CM kicks in (we could also check for duplicate reads and get value from read set) */
+# if defined(IRREVOCABLE_ENABLED) && defined(IRREVOCABLE_IMPROVED)
+    if (tx->irrevocable && ATOMIC_LOAD(&irrevocable) == 1)
+      ATOMIC_STORE(&irrevocable, 2);
+# endif /* defined(IRREVOCABLE_ENABLED) && defined(IRREVOCABLE_IMPROVED) */
 # if CM != CM_MODULAR && defined(IRREVOCABLE_ENABLED)
     if(tx->irrevocable) {
       /* Spin while locked */
@@ -1687,16 +1712,18 @@ static inline stm_word_t stm_read_visible(stm_tx_t *tx, volatile stm_word_t *add
           w = w->next;
         }
       }
-# if CM == CM_MODULAR
       if (GET_STATUS(tx->status) == TX_KILLED) {
         stm_rollback(tx, STM_ABORT_KILLED);
         return 0;
       }
-# endif
       /* No need to add to read set (will remain valid) */
       return value;
     }
     /* Conflict: CM kicks in */
+# if defined(IRREVOCABLE_ENABLED) && defined(IRREVOCABLE_IMPROVED)
+    if (tx->irrevocable && ATOMIC_LOAD(&irrevocable) == 1)
+      ATOMIC_STORE(&irrevocable, 2);
+# endif /* defined(IRREVOCABLE_ENABLED) && defined(IRREVOCABLE_IMPROVED) */
     t = w->tx->status;
     l2 = ATOMIC_LOAD_ACQ(lock);
     if (l != l2) {
@@ -1909,6 +1936,10 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
     goto restart;
 #else /* DESIGN != WRITE_BACK_CTL */
     /* Conflict: CM kicks in */
+# if defined(IRREVOCABLE_ENABLED) && defined(IRREVOCABLE_IMPROVED)
+    if (tx->irrevocable && ATOMIC_LOAD(&irrevocable) == 1)
+      ATOMIC_STORE(&irrevocable, 2);
+# endif /* defined(IRREVOCABLE_ENABLED) && defined(IRREVOCABLE_IMPROVED) */
 # if CM != CM_MODULAR && defined(IRREVOCABLE_ENABLED)
     if (tx->irrevocable) {
       /* Spin while locked */
@@ -2149,12 +2180,14 @@ static inline int stm_unit_write(volatile stm_word_t *addr, stm_word_t value, st
  */
 static void signal_catcher(int sig)
 {
+  sigset_t block_signal;
   stm_tx_t *tx = stm_get_tx();
 
   /* A fault might only occur upon a load concurrent with a free (read-after-free) */
   PRINT_DEBUG("Caught signal: %d\n", sig);
 
-  if (tx == NULL || tx->attr.no_retry) {
+  /* TODO: TX_KILLED should be also allowed */
+  if (tx == NULL || tx->attr.no_retry || GET_STATUS(tx->status) != TX_ACTIVE) {
     /* There is not much we can do: execution will restart at faulty load */
     fprintf(stderr, "Error: invalid memory accessed and no longjmp destination\n");
     exit(1);
@@ -2163,6 +2196,12 @@ static void signal_catcher(int sig)
 # ifdef INTERNAL_STATS
   tx->aborts_invalid_memory++;
 # endif /* INTERNAL_STATS */
+
+  /* Unblock the signal since there is no return to signal handler */
+  sigemptyset(&block_signal);
+  sigaddset(&block_signal, sig);
+  pthread_sigmask(SIG_UNBLOCK, &block_signal, NULL);
+
   /* Will cause a longjmp */
   stm_rollback(tx, STM_ABORT_SIGNAL);
 }
@@ -2309,11 +2348,12 @@ TXTYPE stm_init_thread()
 #endif /* CM == CM_BACKOFF */
 #if CM == CM_MODULAR
   tx->visible_reads = 0;
+  tx->vr = 0;
   tx->timestamp = 0;
 #endif /* CM == CM_MODULAR */
-#if CM == CM_MODULAR || defined(INTERNAL_STATS)
+#if CM == CM_MODULAR || defined(INTERNAL_STATS) || defined(HYBRID_ASF)
   tx->retries = 0;
-#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) */
+#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) || defined(HYBRID_ASF) */
 #ifdef INTERNAL_STATS
   /* Statistics */
   tx->aborts = 0;
@@ -2335,6 +2375,12 @@ TXTYPE stm_init_thread()
 # endif /* READ_LOCKED_DATA */
   tx->max_retries = 0;
 #endif /* INTERNAL_STATS */
+#ifdef HYBRID_ASF
+  tx->software = 0;
+#endif /* HYBRID_ASF */
+#ifdef IRREVOCABLE_ENABLED
+  tx->irrevocable = 0;
+#endif /* IRREVOCABLE_ENABLED */
   /* Store as thread-local data */
 #ifdef TLS
   thread_tx = tx;
@@ -2409,9 +2455,6 @@ sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr)
   /* Attributes */
   tx->attr = (attr == NULL ? default_attributes : *attr);
   tx->ro = tx->attr.read_only; /* TODO ro is a duplicate attribute */
-#ifdef IRREVOCABLE_ENABLED
-  tx->irrevocable = 0;
-#endif /* IRREVOCABLE_ENABLED */
 
   /* Initialize transaction descriptor */
   stm_prepare(tx);
@@ -2445,6 +2488,13 @@ int stm_commit(TXPARAM)
   /* Decrement nesting level */
   if (--tx->nesting > 0)
     return 1;
+
+  /* Callbacks */
+  if (nb_precommit_cb != 0) {
+    int cb;
+    for (cb = 0; cb < nb_precommit_cb; cb++)
+      precommit_cb[cb].f(TXARGS precommit_cb[cb].arg);
+  }
 
   assert(IS_ACTIVE(tx->status));
 #if CM == CM_MODULAR
@@ -2523,10 +2573,24 @@ int stm_commit(TXPARAM)
 
 #ifdef IRREVOCABLE_ENABLED
   /* Verify if there is an irrevocable transaction once all locks have been acquired */
+# ifdef IRREVOCABLE_IMPROVED
+  /* FIXME: it is bogus. the status should be changed to idle otherwise stm_quiesce will not progress */
+  if (!tx->irrevocable) {
+    do {
+      t = ATOMIC_LOAD(&irrevocable);
+      /* If the irrevocable transaction have encountered an acquired lock, abort */
+      if (t == 2) {
+        stm_rollback(tx, STM_ABORT_IRREVOCABLE);
+        return 0;
+      }
+    } while (t);
+  }
+# else /* ! IRREVOCABLE_IMPROVED */
   if (!tx->irrevocable && ATOMIC_LOAD(&irrevocable)) {
     stm_rollback(tx, STM_ABORT_IRREVOCABLE);
     return 0;
   }
+# endif /* ! IRREVOCABLE_IMPROVED */
 #endif /* IRREVOCABLE_ENABLED */ 
   /* Get commit timestamp (may exceed VERSION_MAX by up to MAX_THREADS) */
   t = FETCH_INC_CLOCK + 1;
@@ -2578,8 +2642,15 @@ int stm_commit(TXPARAM)
     if (w->mask != 0)
       ATOMIC_STORE(w->addr, w->value);
     /* Only drop lock for last covered address in write set */
-    if (w->next == NULL)
-      ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
+    if (w->next == NULL) {
+# if CM == CM_MODULAR
+      /* In case of visible read, reset lock to its previous timestamp */
+      if (w->mask == 0)
+        ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(w->version));
+      else
+# endif /* CM == CM_MODULAR */
+        ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
+    }
   }
 #else /* DESIGN == WRITE_BACK_CTL */
   /* Install new versions, drop locks and set new timestamp */
@@ -2592,7 +2663,7 @@ int stm_commit(TXPARAM)
       ATOMIC_STORE(w->addr, w->value);
     } else if (w->mask != 0) {
       value = (ATOMIC_LOAD(w->addr) & ~w->mask) | (w->value & w->mask);
-      ATOMIC_STORE(w->addr, w->value);
+      ATOMIC_STORE(w->addr, value);
     }
     /* Only drop lock for last covered address in write set (cannot be "no drop") */
     if (!w->no_drop)
@@ -2612,6 +2683,7 @@ int stm_commit(TXPARAM)
 
 #if CM == CM_MODULAR
   tx->visible_reads = 0;
+  tx->vr = 0;
 #endif /* CM == CM_MODULAR */
 
 #ifdef HYBRID_ASF
@@ -2619,23 +2691,24 @@ int stm_commit(TXPARAM)
   tx->software = 0;
 #endif /* HYBRID_ASF */
 
+#ifdef IRREVOCABLE_ENABLED
+  if (tx->irrevocable) {
+    ATOMIC_STORE(&irrevocable, 0);
+    if ((tx->irrevocable & 0x08) != 0)
+      stm_quiesce_release(tx);
+    tx->irrevocable = 0;
+  }
+#endif /* IRREVOCABLE_ENABLED */
+
+  /* Set status to COMMITTED */
+  SET_STATUS(tx->status, TX_COMMITTED);
+
   /* Callbacks */
   if (nb_commit_cb != 0) {
     int cb;
     for (cb = 0; cb < nb_commit_cb; cb++)
       commit_cb[cb].f(TXARGS commit_cb[cb].arg);
   }
-
-#ifdef IRREVOCABLE_ENABLED
-  if (tx->irrevocable) {
-    ATOMIC_STORE(&irrevocable, 0);
-    if ((tx->irrevocable & 0x08) != 0)
-      stm_quiesce_release(tx);
-  }
-#endif /* IRREVOCABLE_ENABLED */
-
-  /* Set status to COMMITTED */
-  SET_STATUS(tx->status, TX_COMMITTED);
 
   return 1;
 }
@@ -2714,7 +2787,7 @@ void stm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t
 int stm_active(TXPARAM)
 {
   TX_GET;
-
+  assert (tx != NULL);
   return IS_ACTIVE(tx->status);
 }
 
@@ -2724,7 +2797,7 @@ int stm_active(TXPARAM)
 int stm_aborted(TXPARAM)
 {
   TX_GET;
-
+  assert (tx != NULL);
   return (GET_STATUS(tx->status) == TX_ABORTED);
 }
 
@@ -2735,7 +2808,7 @@ int stm_aborted(TXPARAM)
 int stm_irrevocable(TXPARAM)
 {
   TX_GET;
-
+  assert (tx != NULL);
   return ((tx->irrevocable & 0x07) == 3);
 }
 # endif /* IRREVOCABLE_ENABLED */
@@ -2746,7 +2819,7 @@ int stm_irrevocable(TXPARAM)
 sigjmp_buf *stm_get_env(TXPARAM)
 {
   TX_GET;
-
+  assert (tx != NULL);
   /* Only return environment for top-level transaction */
   return tx->nesting == 0 ? &tx->env : NULL;
 }
@@ -2762,11 +2835,20 @@ stm_tx_attr_t *stm_get_attributes(TXPARAM)
 }
 
 /*
+ * Get transaction attributes from a specifc transaction.
+ */
+stm_tx_attr_t *stm_get_attributes_tx(struct stm_tx *tx)
+{ 
+  return &tx->attr;
+}
+
+/*
  * Return statistics about a thread/transaction.
  */
 int stm_get_stats(TXPARAMS const char *name, void *val)
 {
   TX_GET;
+  assert (tx != NULL);
 
   if (strcmp("read_set_size", name) == 0) {
     *(unsigned int *)val = tx->r_set.size;
@@ -2964,6 +3046,7 @@ void *stm_get_specific(TXPARAMS int key)
 int stm_register(void (*on_thread_init)(TXPARAMS void *arg),
                  void (*on_thread_exit)(TXPARAMS void *arg),
                  void (*on_start)(TXPARAMS void *arg),
+                 void (*on_precommit)(TXPARAMS void *arg),
                  void (*on_commit)(TXPARAMS void *arg),
                  void (*on_abort)(TXPARAMS void *arg),
                  void *arg)
@@ -2971,6 +3054,7 @@ int stm_register(void (*on_thread_init)(TXPARAMS void *arg),
   if ((on_thread_init != NULL && nb_init_cb >= MAX_CB) ||
       (on_thread_exit != NULL && nb_exit_cb >= MAX_CB) ||
       (on_start != NULL && nb_start_cb >= MAX_CB) ||
+      (on_precommit != NULL && nb_precommit_cb >= MAX_CB) ||
       (on_commit != NULL && nb_commit_cb >= MAX_CB) ||
       (on_abort != NULL && nb_abort_cb >= MAX_CB)) {
     fprintf(stderr, "Error: maximum number of modules reached\n");
@@ -2990,6 +3074,11 @@ int stm_register(void (*on_thread_init)(TXPARAMS void *arg),
   if (on_start != NULL) {
     start_cb[nb_start_cb].f = on_start;
     start_cb[nb_start_cb++].arg = arg;
+  }
+  /* Pre-commit callback */
+  if (on_precommit != NULL) {
+    precommit_cb[nb_precommit_cb].f = on_precommit;
+    precommit_cb[nb_precommit_cb++].arg = arg;
   }
   /* Commit callback */
   if (on_commit != NULL) {
@@ -3227,6 +3316,12 @@ int stm_set_irrevocable(TXPARAMS int serial)
 # endif /* CM == CM_MODULAR */
   TX_GET;
 
+  if (!IS_ACTIVE(tx->status) && serial != -1) {
+    /* Request irrevocability outside of a transaction or in abort handler (for next execution) */
+    tx->irrevocable = 1 + (serial ? 0x08 : 0);
+    return 0;
+  }
+
   /* Are we already in irrevocable mode? */
   if ((tx->irrevocable & 0x07) == 3) {
     return 1;
@@ -3235,6 +3330,13 @@ int stm_set_irrevocable(TXPARAMS int serial)
   if (tx->irrevocable == 0) {
     /* Acquire irrevocability for the first time */
     tx->irrevocable = 1 + (serial ? 0x08 : 0);
+#ifdef HYBRID_ASF
+    /* TODO: we shouldn't use pthread_mutex/cond since it could use syscall. */
+    if (tx->software == 0) {
+      asf_abort(ASF_RETRY_IRREVOCABLE);
+      return 0;
+    }
+#endif /* HYBRID_ASF */
     /* Try acquiring global lock */
     if (irrevocable == 1 || ATOMIC_CAS_FULL(&irrevocable, 0, 1) == 0) {
       /* Transaction will acquire irrevocability after rollback */
@@ -3257,6 +3359,7 @@ int stm_set_irrevocable(TXPARAMS int serial)
     }
 # endif /* CM == CM_MODULAR */
     if (serial && tx->w_set.nb_entries != 0) {
+      /* TODO: or commit the transaction when we have the irrevocability. */
       /* Don't mix transactional and direct accesses => restart with direct accesses */
       stm_rollback(tx, STM_ABORT_IRREVOCABLE);
       return 0;
@@ -3297,51 +3400,39 @@ int stm_set_irrevocable(TXPARAMS int serial)
 
 
 #ifdef HYBRID_ASF
-/* FIXME: ptlsim seems to not process pause */
-#define NOP __asm__ __volatile__("pause");
-//#define NOP __asm__ __volatile__("xor %0, %0\n": : "a"(0));
-#define NOP10 NOP NOP NOP NOP NOP NOP NOP NOP NOP NOP
-#define NOP100 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10
-void hytm_restart()
-{
-  stm_tx_t *tx = stm_get_tx();
-  int i;
-  /* Backoff sleep TODO add randomness */
-  for(i = 0; i < tx->retries; i++)
-    NOP100;
 
-  /* Restore context before restarting */
-  /* FIXME return value to indicate which path to use */
-#if defined(TM_DTMC)
-  siglongjmp(tx->env, 0x01); /* ABI 0x01 = runInstrumented, DTMC explicitly needs 1 */
-#else /* ! defined(TM_DTMC) */
-  siglongjmp(tx->env, 0x09); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
-#endif /* ! defined(TM_DTMC) */
+/* Checking that the write-set can contains at least 256 */
+/* XXX ASF can write many times at the same address, thus we can overflow */
+#if RW_SET_SIZE <= 256
+# error ASF (LLB_256) needs at least 256 entries for the write set.
+#endif /* RW_SET_SIZE */
+
+static inline uint64_t rdtsc()
+{
+    uint64_t hi, lo;
+    __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+    return (uint64_t)hi << 32 | lo;
 }
 
 stm_word_t hytm_load(TXPARAMS volatile stm_word_t *addr)
 {
   volatile stm_word_t *lock;
-  /* TODO Check volatile */
   stm_word_t l;
   lock = GET_LOCK(addr);
   /* Load descriptor using ASF */
   l = asf_lock_load64((long unsigned int *)lock);
   if (unlikely(LOCK_GET_WRITE(l))) {
     /* a software transaction is currently using this descriptor */
-    asf_abort(ASF_STATUS_ABORT);
+    asf_abort(ASF_RETRY);
     /* unreachable */
     return 0;
   }
-  /* TODO until now PTLSIM/ASF, doesn't follow the ASF specification and an
-   * unprotected load can happen before a protected load (the lock desc).
-   * Otherwise, when fixed, this protected load can be transform into regular
-   * load.
-   */
   /* addr can return inconsistent value but will be abort after few cycles */
-//  return *addr;
-  /* Load value using ASF */
-  return asf_lock_load64((long unsigned int *)addr);
+  return *addr;
+  /* Load value using ASF.
+   * (in previous version of PTLSIM/ASF, the ordering was not respected).
+   * TODO: to be removed. */
+  /*return asf_lock_load64((long unsigned int *)addr);*/
 }
 
 void hytm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
@@ -3349,20 +3440,19 @@ void hytm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
   TX_GET;
   volatile stm_word_t *lock;
   stm_word_t l;
-/* FIXME HYTM only works with CM SUICIDE and locks must covers only 8 bytes (no extra shift) */
   lock = GET_LOCK(addr);
   /* Load descriptor using ASF */
   l = asf_lock_load64((long unsigned int *)lock);
   if (unlikely(LOCK_GET_WRITE(l))) {
     /* a software transaction is currently using this descriptor, ASF tx has to give up */
-    asf_abort(ASF_STATUS_ABORT);
-    /* mark as unreachable */
+    asf_abort(ASF_RETRY);
+    /* XXX mark as unreachable */
     return;
   }
   /* Write the value using ASF */
   asf_lock_store64((long unsigned int *)addr, value);
   /* Add to write set to update the locks when we acquire TS */
-  /* TODO Check for array overflow */
+  /* XXX This could overflow if many write to the same address. */
   tx->w_set.entries[tx->w_set.nb_entries++].lock = lock;
 }
 
@@ -3378,24 +3468,43 @@ int hytm_commit(TXPARAM)
   int i;
   TX_GET;
 
+  /* Release irrevocability */
+#ifdef IRREVOCABLE_ENABLED
+  if (tx->irrevocable) {
+    ATOMIC_STORE(&irrevocable, 0);
+    if ((tx->irrevocable & 0x08) != 0)
+      stm_quiesce_release(tx);
+    tx->irrevocable = 0;
+    goto commit_end;
+  }
+#endif /* IRREVOCABLE_ENABLED */
+
   t = FETCH_INC_CLOCK + 1;
   
   /* Set new timestamp in locks */
   w = tx->w_set.entries;
   for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
-    /* TODO Maybe no duplicate entries can improve perf? */
+    /* XXX Maybe no duplicate entries can improve perf? */
     asf_lock_store64((long unsigned int *)w->lock, LOCK_SET_TIMESTAMP(t));
   }
   /* Commit the hytm transaction */
   asf_commit();
 
+commit_end:
+  tx->retries = 0;
+  /* Set status to COMMITTED */
+  SET_STATUS(tx->status, TX_COMMITTED);
+
   /* TODO statistics */
+#ifdef INTERNAL_STATS
+  
+#endif
   return 1;
 }
 
 void hytm_abort(TXPARAMS int reason)
 {
-  asf_abort(ASF_STATUS_ABORT);
+  asf_abort(ASF_RETRY);
 }
 
 sigjmp_buf *hytm_start(TXPARAMS stm_tx_attr_t *attr)
@@ -3403,25 +3512,98 @@ sigjmp_buf *hytm_start(TXPARAMS stm_tx_attr_t *attr)
   TX_GET;
   unsigned long err;
 
+  tx->retries = 0;
+  /* Set status */
+  UPDATE_STATUS(tx->status, TX_ACTIVE);
   stm_check_quiesce(tx);
+  /* copy attributes if need to switch to software mode */
+  tx->attr = (attr == NULL ? default_attributes : *attr);
+  tx->start = rdtsc();
 
-  __asm__ __volatile__ (""ASF_SPECULATE :"=a" (err));
+hytm_restart:
+  /* All registers are lost when ASF aborts, thus we discard registers */
+  asm volatile (ASF_SPECULATE 
+                :"=a" (err)
+                :
+                :"memory","rbp","rbx","rcx","rdx","rsi","rdi",
+                 "r8", "r9","r10","r11","r12","r13","r14","r15" );
+ 
+  tx = stm_get_tx();
   if (unlikely(asf_status_code(err) != 0)) {
-    __asm__ __volatile__("": : : "memory"); /* All registers are lost when ASF aborts, thus we force reloading from memory */
-    TX_GET; /* Get Tx descriptor */
+    /* Set status to ABORTED */
+    SET_STATUS(tx->status, TX_ABORTED);
+    tx->retries++;
     /* Error management */
-    if (asf_abort_code(err) == ASF_STATUS_CONTENTION) {
-      tx->retries++;
-      if (tx->retries > ASF_ABORT_THRESHOLD) 
+    if (asf_status_code(err) == ASF_STATUS_CONTENTION) {
+      if (tx->retries > ASF_ABORT_THRESHOLD) {
+        /* There is too many conflicts, software will not help, start irrevocability. */
+        stm_set_irrevocable(TXARGS 1);  /* Set irrevocable serial */
+#if defined(TM_DTMC)
+        stm_set_irrevocable(TXARGS -1); /* Acquire irrevocability */
+        UPDATE_STATUS(tx->status, TX_IRREVOCABLE);
+        siglongjmp(tx->env, 0x02); /* ABI 0x02 = runUninstrumented */
+#else /* ! defined(TM_DTMC) */
+        /* Non-tm compiler and GCC doesn't have path without instrumentation. */
         tx->software = 1;
+#endif /* ! defined(TM_DTMC) */
+      }
+    } else if (asf_status_code(err) == ASF_STATUS_ABORT) {
+      if (asf_abort_code(err) == ASF_FORCE_SOFTWARE) {
+        tx->software = 1;
+#ifdef IRREVOCABLE_ENABLED
+      } else if(asf_abort_code(err) == ASF_RETRY_IRREVOCABLE) {
+#if defined(TM_DTMC)
+        if (tx->irrevocable != 0) {
+          stm_set_irrevocable(TXARGS -1);
+          UPDATE_STATUS(tx->status, TX_IRREVOCABLE);
+          siglongjmp(tx->env, 0x02); /* ABI 0x02 = runUninstrumented */
+        } 
+#else /* ! defined(TM_DTMC) */
+        /* Non-tm compiler and GCC doesn't have path without instrumentation. */
+        tx->software = 1;
+#endif /* ! defined(TM_DTMC) */
+#endif /* IRREVOCABLE_ENABLED */
+      } else {
+        if (tx->retries > ASF_ABORT_THRESHOLD) { 
+          tx->software = 1;
+        }
+      }
     } else {
+      /* Other cases are critical and needs software mode */
       tx->software = 1;
     }
-    /* hytm_restart must do a backoff sleep since ASF has a requester-win strategy and then livelock could happen */
-    hytm_restart();
+    if (tx->software) {
+      /* Start a software transaction (it cannot use attr since the register/stack can be corrupted) */
+      stm_start(TXARGS &tx->attr);
+      /* Restoring the context */
+#if defined(TM_DTMC)
+      siglongjmp(tx->env, 0x01); /* ABI 0x01 = runInstrumented, DTMC explicitly needs 1 */
+#else /* ! defined(TM_DTMC) */
+      siglongjmp(tx->env, 0x09); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
+#endif /* ! defined(TM_DTMC) */
+    } else {
+      uint64_t wait = (uint64_t)rdtsc + (random() % (rdtsc() - tx->start)); /* XXX random but maybe not reliable */
+      /* Waiting... */
+      while (rdtsc() < wait);
+      UPDATE_STATUS(tx->status, TX_ACTIVE);
+      /* Check quiesce before to restart */
+      stm_check_quiesce(tx);
+      goto hytm_restart;
+    }
   }
+ 
   /* Reset write set */
   tx->w_set.nb_entries = 0;
+
+  if (tx->retries > 0) {
+    /* Restoring registers for retry */
+#if defined(TM_DTMC)
+    siglongjmp(tx->env, 0x01); /* ABI 0x01 = runInstrumented, DTMC explicitly needs 1 */
+#else /* ! defined(TM_DTMC) */
+    siglongjmp(tx->env, 0x09); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
+#endif /* ! defined(TM_DTMC) */
+  } 
+
   return &tx->env;
 }
 
@@ -3487,6 +3669,59 @@ void tm_abort(TXPARAMS int reason)
     stm_abort(TXARGS reason);
   }
 }
+
+int tm_hybrid(TXPARAM)
+{
+  TX_GET;
+  return !tx->software;
+}
+
+void tm_restart_software(TXPARAM)
+{
+  TX_GET;
+  if (!tx->software) {
+    asf_abort(ASF_FORCE_SOFTWARE);
+  }
+}
+#else
+/* Define tm_* functions */
+
+sigjmp_buf *tm_start(TXPARAMS stm_tx_attr_t *attr)
+{
+  return stm_start(TXARGS attr);
+}
+
+stm_word_t tm_load(TXPARAMS volatile stm_word_t *addr)
+{
+  return stm_load(TXARGS addr);
+}
+
+void tm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
+{
+  stm_store(TXARGS addr, value);
+}
+
+void tm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask)
+{
+  stm_store2(TXARGS addr, value, mask);
+}
+
+int tm_commit(TXPARAM)
+{
+  return stm_commit(TXARG);
+}
+void tm_abort(TXPARAMS int reason)
+{
+  stm_abort(TXARGS reason);
+}
+
+/* TODO what should be done for hybrid specific functions */
+void tm_restart_software(TXPARAM) {
+}
+int tm_hybrid(TXPARAM) {
+  return 0;
+}
+
 
 #endif /* HYBRID_ASF */
 

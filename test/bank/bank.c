@@ -7,7 +7,7 @@
  * Description:
  *   Bank stress test.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -448,7 +448,7 @@ int main(int argc, char **argv)
   }
 
   if (seed == 0)
-    srand((int)time(0));
+    srand((int)time(NULL));
   else
     srand(seed);
 
@@ -625,6 +625,9 @@ int main(int argc, char **argv)
     printf("  Variance    : %f\n", ab_stats.variance);
     printf("  Min         : %f\n", ab_stats.min); 
     printf("  Max         : %f\n", ab_stats.max);
+    printf("  50th perc.  : %f\n", ab_stats.percentile_50);
+    printf("  90th perc.  : %f\n", ab_stats.percentile_90);
+    printf("  95th perc.  : %f\n", ab_stats.percentile_95);
   }
 
   /* Delete bank and accounts */

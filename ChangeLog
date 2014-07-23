@@ -1,3 +1,30 @@
+2011-11-17  Patrick Marlier <patrick.marlier@unine.ch>
+	* Fixed stack saving and minor changes for DTMC (tanger).
+
+2011-10-20  Patrick Marlier <patrick.marlier@unine.ch>
+	* Fixed a bug in tanger_stm_realloc (reported by Luke Dalessandro).
+
+2011-02-15  Patrick Marlier <patrick.marlier@unine.ch>
+	* Fixed a bug in stm_rollback (reported by Rahul Gayatri).
+
+2011-02-07  Patrick Marlier <patrick.marlier@unine.ch>
+	* Minor fixes.
+	* Added stm_get_attribute_tx() for Event Processing.
+	* Added transactional_safe new/delete operators for GCC-TM.
+
+2010-08-10  Patrick Marlier <patrick.marlier@unine.ch>
+	* ABI uses WRITE_THROUGH by default.
+	* Added irrevocability management for hybrid ASF mode.
+	* Disable inlining for tanger load/store due to a LLVM bug.
+	* Fixed a bug in gc.c (thanks to Walther Maldonado).
+	* Fixed a bug in mod_log.c (thanks to Adam Cozzette).
+
+2010-07-08  Patrick Marlier <patrick.marlier@unine.ch>
+	* Fixed a bug in stm_commit with CTL (thanks to Srđan Stipić).
+
+2010-07-07 Pascal Felber  <pascal.felber@unine.ch>
+	* Fixed a bug in stm_set_irrevoable when using abort handler.
+
 2010-06-02  Patrick Marlier <patrick.marlier@unine.ch>
 	* Added Hybrid TM using AMD ASF.
 	* Added ABI compatability with Intel STM C Compiler, GCC with TM
@@ -132,38 +159,4 @@
 	* Added bank benchmark.
 
 2008-01-01  Pascal Felber  <pascal.felber@unine.ch>
-	* Fixed Makefile.
-
-[0.7.3 release]
-
-2007-11-02  Pascal Felber  <pascal.felber@unine.ch>
-	* Added minimal support for nested transactions (flat nesting).
-
-2007-10-30  Pascal Felber  <pascal.felber@unine.ch>
-	* Fixed bug in stm_free().
-	* Refactored part of the code.
-	* Added TLS support (Torvald Riegel).
-	* Various minor fixes.
-
-[0.7.2 release]
-
-2007-09-13  Pascal Felber  <pascal.felber@unine.ch>
-
-	* Changed ro parameter of stm_start() to int*.
-	* Various minor fixes.
-
-2007-09-05  Pascal Felber  <pascal.felber@unine.ch>
-
-	* Added TANGER wrappers.
-	* Reorganized directories and makefiles.
-	* Added a simple regression test.
-	* Added stm_active() function.
-	* Added void stm_set_specific()/stm_get_specific() functions.
-	* Use sigsetjmp()/siglongjmp() instead of setjmp()/longjmp().
-	* Various minor fixes.
-
-[0.7.1 release]
-
-2007-08-27  Pascal Felber  <pascal.felber@unine.ch>
-
-	* Initial release.
+	* Initial code base for the VELOX project.

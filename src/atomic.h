@@ -7,7 +7,7 @@
  * Description:
  *   Atomic operations.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -23,17 +23,23 @@
 #ifndef _ATOMIC_H_
 # define _ATOMIC_H_
 
-# ifndef LIBAO_HOME
+# ifdef ATOMIC_BUILTIN
 typedef volatile size_t atomic_t;
 #  ifndef UNSAFE
-/* Note: __sync_ is available for GCC 4.2+ and ICC 11.1+ */
+#   warning "This is experimental and shouldn't be used"
+/* 
+   Note: __sync_ is available for GCC 4.2+ and ICC 11.1+ 
+   But these definitions are not 100% safe:
+    * need 'a' to be volatile
+    * no fence for read/store proposed (only full fence)
+*/
 #   define ATOMIC_CAS_FULL(a, e, v)      (__sync_bool_compare_and_swap(a, e, v))
 #   define ATOMIC_FETCH_INC_FULL(a)      (__sync_fetch_and_add(a, 1))
 #   define ATOMIC_FETCH_DEC_FULL(a)      (__sync_fetch_and_add(a, -1))
 #   define ATOMIC_FETCH_ADD_FULL(a, v)   (__sync_fetch_and_add(a, v))
 #   define ATOMIC_LOAD_ACQ(a)            (*(a))
 #   define ATOMIC_LOAD(a)                (*(a))
-#   define ATOMIC_STORE_REL(a, v)        (*(a) = (v)) /* TODO I guess it need __sync_synchronized */
+#   define ATOMIC_STORE_REL(a, v)        (*(a) = (v))
 #   define ATOMIC_STORE(a, v)            (*(a) = (v))
 #   define ATOMIC_MB_READ                /* Nothing */
 #   define ATOMIC_MB_WRITE               /* Nothing */
@@ -53,8 +59,8 @@ typedef volatile size_t atomic_t;
 #   define ATOMIC_MB_FULL                /* Nothing */
 #  endif /* UNSAFE */
 
-# else /* LIBAO_HOME */
-/* FIXME temporary */
+# else /* ! ATOMIC_BUILTIN */
+/* NOTE: enable fence instructions for i386 and amd64 */
 #define AO_USE_PENTIUM4_INSTRS
 # include <atomic_ops.h>
 typedef AO_t atomic_t;

@@ -7,7 +7,7 @@
  * Description:
  *   Epoch-based garbage collector.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -287,8 +287,8 @@ void gc_init_thread()
     if (used != GC_BUSY) {
       if (ATOMIC_CAS_FULL(&gc_threads.slots[i].used, used, GC_BUSY) != 0) {
         idx = i;
-        /* Sets lower bound to current time (transactions by this thread cannot happen before) */
-        ATOMIC_STORE(&gc_threads.slots[idx].ts, gc_current_epoch());
+        /* Sets lower bound to EPOCH_MAX (thread will need to set correct timestamp before first transaction) */
+        ATOMIC_STORE(&gc_threads.slots[idx].ts, EPOCH_MAX);
         break;
       }
       /* CAS failed: another thread must have acquired slot */
@@ -312,6 +312,7 @@ void gc_init_thread()
 void gc_exit_thread()
 {
   int idx = gc_get_idx();
+  /* NOTA: if gc_exit_thread is not called when it finishes, others threads will not free chunks. */
 
   PRINT_DEBUG("==> gc_exit_thread(%d)\n", idx);
 

@@ -12,9 +12,9 @@ include $(ROOT)/Makefile.common
 #TODO test if function are inline or need a specific header to force inlining
 #TODO Flags may changed. I must find a way to keep up to date with current tiny. 
 
-DEFINES += -DDESIGN=WRITE_BACK_ETL
+# DEFINES += -DDESIGN=WRITE_BACK_ETL
 # DEFINES += -DDESIGN=WRITE_BACK_CTL
-# DEFINES += -DDESIGN=WRITE_THROUGH
+DEFINES += -DDESIGN=WRITE_THROUGH
 
 DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
@@ -59,11 +59,13 @@ endif
 # Use explicit parameters for Tanger and Intel STM Compiler
 
 # TODO make it MacOS compatible
+
 # Remove the -DEXPLICIT_TX_PARAMETER flag if defined
 # Manage it accordingly to the required library 
+# TODO is it useful?
 DEF_ABI = $(subst -DEXPLICIT_TX_PARAMETER,,$(DEFINES))
 
-# TODO Rules for intset benchmarks
+# Rules for intset benchmarks
 BINS = intset-hs intset-ll intset-rb intset-sl
 
 intset-hs.o:	$(ROOT)/test/intset/intset.c
@@ -80,15 +82,39 @@ intset-sl.o:	$(ROOT)/test/intset/intset.c
 
 # FIXME in case of ABI $(TMLIB) must be replaced to abi/...
 $(BINS):	%:	%.o all
-	$(TESTLD) $(TESTLDFLAGS) -o $@ $<  -lpthread
+	$(TESTLD) -o $@ $< $(TESTLDFLAGS) -lpthread
 
 test: 	all $(BINS)
 
-check: 	test intset-check
-
-
 intset-clean:
 	rm -f $(BINS)
+
+# Rules for intset ASF specific benchmarks
+BINSASF = intset-hs-asf intset-ll-asf intset-rb-asf intset-sl-asf
+
+intset-hs-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_HASHSET -c -o $@ $<
+
+intset-ll-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_LINKEDLIST -c -o $@ $<
+
+intset-rb-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_RBTREE -c -o $@ $<
+
+intset-sl-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_SKIPLIST -c -o $@ $<
+
+# FIXME in case of ABI $(TMLIB) must be replaced to abi/...
+$(BINSASF):	%:	%.o all
+	$(TESTLD) -o $@ $< $(TESTLDFLAGS) -lpthread
+
+# TODO to be tested!
+testasf: all $(BINSASF)
+
+intsetasf-clean:
+	rm -f $(BINSASF)
+
+check: 	test intset-check
 
 intset-check:
 	@echo Testing Linked List \(intset-ll\)
@@ -108,8 +134,4 @@ intset-check:
 	@echo Testing Hash Set with concurrency \(intset-hs -n 4\)
 	@./intset-hs -d 2000 -n 4 1>/dev/null 2>&1
 	@echo All tests passed
-
-
-# FIXME add check
-
 

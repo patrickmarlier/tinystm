@@ -6,7 +6,7 @@
  * Description:
  *   ABI for tinySTM.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -37,8 +37,8 @@ typedef void (*_ITM_userCommitFunction)(void *);
 typedef uint32_t _ITM_transactionId;
 #define _ITM_noTransactionId 1		/* Id for non-transactional code. */
 
-#define _ITM_VERSION_NO_STR "1.0.1"
-#define _ITM_VERSION_NO 101
+#define _ITM_VERSION_NO_STR "1.0.3"
+#define _ITM_VERSION_NO 103
 
 typedef enum
 {
@@ -149,9 +149,11 @@ void _ITM_CALL_CONVENTION _ITM_dropReferences(TX_ARGS1 const void *__start, size
 
 void _ITM_CALL_CONVENTION _ITM_userError(const char *errString, int exitCode);
 
-void * _ITM_CALL_CONVENTION _ITM_malloc(size_t size);
+void * _ITM_malloc(size_t size);
 
-void _ITM_CALL_CONVENTION _ITM_free(void *ptr);
+void * _ITM_calloc(size_t nm, size_t size);
+
+void _ITM_free(void *ptr);
 
 const char * _ITM_CALL_CONVENTION _ITM_libraryVersion(void);
 
@@ -203,6 +205,8 @@ _ITM_CALL_CONVENTION
 void *_ITM_getTMCloneSafe (void *);
 void _ITM_registerTMCloneTable (void *, size_t);
 void _ITM_deregisterTMCloneTable (void *);
+_ITM_CALL_CONVENTION
+void _ITM_commitTransactionEH(void *);
 #endif
 
 

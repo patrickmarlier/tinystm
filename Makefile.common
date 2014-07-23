@@ -1,9 +1,11 @@
 # Path to root directory
 ROOT ?= .
 
-CC ?= gcc
-LD ?= gcc
-AR ?= ar
+# CC and AR are builtin-variables of Make (?= is useless in this case)
+# To override these defines, you must use "make CC=cc" or change it here
+CC = gcc
+LD = gcc
+AR = ar
 DOXYGEN ?= doxygen
 UNIFDEF ?= unifdef
 
@@ -21,14 +23,29 @@ SRCDIR = $(ROOT)/src
 INCDIR = $(ROOT)/include
 LIBDIR = $(ROOT)/lib
 
-#TODO to test if callq  0x4014d8 <__stack_chk_fail@plt> appears in O3 code
+# TODO libc specific -DFORTIFY_SOURCE=0 to avoid extra checking
+# Otherwise we have such call if callq  0x4014d8 <__stack_chk_fail@plt> appears in O3 code
 #CFLAGS += -fno-stack-protector
+# TODO this is GCC specific if CC == GCC
 CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -fno-stack-protector -D_REENTRANT
 CFLAGS += -I$(INCDIR) -I$(SRCDIR)
 
 LDFLAGS += -L$(LIBDIR) -l$(TM) -lpthread
 
 TMLIB = $(LIBDIR)/lib$(TM).a
+
+########################################################################
+# libatomic_ops path
+# LIBAO_HOME must be set to the path of libatomic_ops
+# (use the embedded light libatomic_ops if LIBAO_HOME is not defined)
+########################################################################
+ifndef LIBAO_HOME
+  LIBAO_HOME = $(SRCDIR)/atomic_ops
+  LIBAO_INC = $(LIBAO_HOME)
+else
+  LIBAO_INC = $(LIBAO_HOME)/include
+endif
+CFLAGS += -I$(LIBAO_INC)
 
 # GCC thread-local storage (enable if supported on target architecture)
 ifdef NOTLS

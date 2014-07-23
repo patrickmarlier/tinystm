@@ -7,7 +7,7 @@
  * Description:
  *   Regression test for various data types.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -500,7 +500,7 @@ void *test(void *v)
   int nested, store;
   sigjmp_buf *e;
 
-  seed = (unsigned int)time(0);
+  seed = (unsigned int)time(NULL);
   stm_init_thread();
   while (stop == 0) {
     nested = (rand_r(&seed) < RAND_MAX / 3);

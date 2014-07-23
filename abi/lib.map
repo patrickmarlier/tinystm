@@ -182,10 +182,14 @@ LIBITM_1.0 {
 
 	_ZGTtnwm;
 	_ZGTtnam;
+	_ZGTtnwj;
+	_ZGTtnaj;
 	_ZGTtdlPv;
 	_ZGTtdaPv;
 	_ZGTtnwmRKSt9nothrow_t;
 	_ZGTtnamRKSt9nothrow_t;
+	_ZGTtnwjRKSt9nothrow_t;
+	_ZGTtnajRKSt9nothrow_t;
 	_ZGTtdlPvRKSt9nothrow_t;
 	_ZGTtdaPvRKSt9nothrow_t;
 

@@ -7,7 +7,7 @@
  * Description:
  *   Module for logging memory accesses.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -420,6 +420,8 @@ static void mod_log_on_abort(TXPARAMS void *arg)
          exit(1);
       }
     } while (--w >= ws->entries);
+    /* Erase undo log */
+    ws->nb_entries = 0;
   }
   assert(ws->allocated == 0);
 }
@@ -432,7 +434,7 @@ void mod_log_init()
   if (mod_log_initialized)
     return;
 
-  stm_register(mod_log_on_thread_init, mod_log_on_thread_exit, NULL, mod_log_on_commit, mod_log_on_abort, NULL);
+  stm_register(mod_log_on_thread_init, mod_log_on_thread_exit, NULL, NULL, mod_log_on_commit, mod_log_on_abort, NULL);
   mod_log_key = stm_create_specific();
   if (mod_log_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");

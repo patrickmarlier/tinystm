@@ -7,7 +7,7 @@
  * Description:
  *   Module for user callback.
  *
- * Copyright (c) 2007-2010.
+ * Copyright (c) 2007-2011.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -196,7 +196,7 @@ void mod_cb_init()
   if (mod_cb_initialized)
     return;
 
-  stm_register(mod_cb_on_thread_init, mod_cb_on_thread_exit, NULL, mod_cb_on_commit, mod_cb_on_abort, NULL);
+  stm_register(mod_cb_on_thread_init, mod_cb_on_thread_exit, NULL, NULL, mod_cb_on_commit, mod_cb_on_abort, NULL);
   mod_cb_key = stm_create_specific();
   if (mod_cb_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");

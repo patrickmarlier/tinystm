@@ -11,7 +11,7 @@ extern "C"
 #include <stddef.h>
 #include <stdint.h>
 
-/* FIXME Use compiler.h */
+/* FIXME Use tm_macros.h */
 #if (defined(_TM))
 #  define TM_PURE __declspec (tm_pure)
 #else

@@ -59,6 +59,7 @@ static inline void asf_lock_prefetch(void *m) {
         :
         :"m"(*(long*)m));
 }
+// XXX annotate with __attribute__((noreturn))
 static inline void asf_abort(int abort_code) {
     asm volatile(
         ASF_ABORT

@@ -93,8 +93,8 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-DEFINES += -DINTERNAL_STATS
-# DEFINES += -UINTERNAL_STATS
+# DEFINES += -DINTERNAL_STATS
+DEFINES += -UINTERNAL_STATS
 
 ########################################################################
 # Ensure that the global clock does not share the same cache line than
@@ -139,8 +139,8 @@ DEFINES += -UUSE_BLOOM_FILTER
 # enabling this feature.
 ########################################################################
 
-DEFINES += -DEPOCH_GC
-# DEFINES += -UEPOCH_GC
+# DEFINES += -DEPOCH_GC
+DEFINES += -UEPOCH_GC
 
 ########################################################################
 # Keep track of conflicts between transactions and notifies the
@@ -197,24 +197,16 @@ DEFINES += -USIGNAL_HANDLER
 ########################################################################
 
 ifdef HYBRID_ASF
-  DEFINES += -DHYBRID_ASF -DASF_STACK -fomit-frame-pointer
+  ifneq ($(HYBRID_ASF), 0)
+    DEFINES += -DHYBRID_ASF -DASF_STACK -fomit-frame-pointer
+  else
+    DEFINES += -UHYBRID_ASF
+  endif
 else
   DEFINES += -UHYBRID_ASF
 endif
 
 # TODO Enable the construction of 32bit lib on 64bit environment 
-
-########################################################################
-# Enable the use of libatomic_ops
-# LIBAO_HOME must be set to the path of libatomic_ops
-# (use the compiler atomic builtins by default)
-########################################################################
-ifdef LIBAO_HOME
-  LIBAO_INC = $(LIBAO_HOME)/include
-  CFLAGS += -I$(LIBAO_INC)
-else
-  DEFINES += -ULIBAO_HOME
-endif
 
 
 ########################################################################
@@ -300,6 +292,9 @@ $(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(GC) $(MODULES)
 test:	$(TMLIB)
 	$(MAKE) -C test
 
+test-asf:	$(TMLIB)
+	$(MAKE) -C test-asf
+
 abi:
 	$(MAKE) -C abi
 
@@ -319,4 +314,5 @@ clean:
 	rm -f $(TMLIB) $(SRCDIR)/*.o
 	$(MAKE) -C abi clean
 	TARGET=clean $(MAKE) -C test
+	TARGET=clean $(MAKE) -C test-asf
 
