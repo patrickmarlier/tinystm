@@ -7,18 +7,27 @@ memory until commit time) and write-through (updates are directly
 written to memory).  The version can be selected by editing the
 Makefile.
 
+TinySTM compiles and runs on 32 or 64-bit architectures.  It was tested
+on various flavors of Unix, on Mac OS X, and on Windows using cygwin.
+It comes with a few test applications, notably a linked list and a
+red-black tree.
+
+INSTALLATION:
+
 TinySTM requires the atomic_ops library, freely available from:
     http://www.hpl.hp.com/research/linux/atomic_ops/
 
 The environment variable LIBAO_HOME must be set to the installation
 directory of atomic_ops, if different from /usr/local.
 
-TinySTM compiles and runs on 32 or 64-bit architectures.  It was tested
-on various flavors of Unix, on Mac OS X, and on Windows using cygwin.
-It comes with two test applications: a linked list and a red-black tree.
+If you want to generate the libraries for TANGER, the environment
+variable TANGER_HOME must be set to the installation directory of
+TANGER. Alternatively, environment variables can be specified when
+invoking `make'.
 
-To compile TinySTM and the test applications, just execute make in the
-main directory.
+To compile TinySTM libraries, execute `make' in the main directory. To
+compile test applications, execute `make test'. To compile libraries for
+TANGER, execute `make tanger' or `make tanger TANGER_HOME=<path>'.
 
 CONTACT:
 

@@ -84,7 +84,7 @@ typedef struct w_entry {                /* Write set entry */
   stm_word_t mask;                      /* Write mask */
   stm_word_t version;                   /* Old version (for undo) */
   volatile stm_word_t *lock;            /* Pointer to lock (for fast access) */
-  unsigned char no_drop;                /* Should we drop lock upon undo? */
+  int no_drop;                          /* Should we drop lock upon undo? */
 } w_entry_t;
 
 typedef struct w_set {                  /* Write set */
@@ -104,13 +104,14 @@ struct stm_tx {                         /* Transaction descriptor */
   stm_word_t end;                       /* End timestamp (validity range) */
   r_set_t r_set;                        /* Read set */
   w_set_t w_set;                        /* Write set */
-  jmp_buf env;                          /* Environment for setjmp/longjmp */
-  jmp_buf *jmp;                         /* Pointer to environment (NULL when not using setjmp/longjmp) */
-  int ro;                               /* Is the transaction read-only (hint)? */
+  sigjmp_buf env;                       /* Environment for setjmp/longjmp */
+  sigjmp_buf *jmp;                      /* Pointer to environment (NULL when not using setjmp/longjmp) */
+  int *ro_hint;                         /* Is the transaction read-only (hint)? */
+  int ro;                               /* Is this execution read-only? */
   int must_free;                        /* Did we allocate memory for this descriptor? */
   mem_block_t *allocated;               /* Memory allocated by this transation (freed upon abort) */
   mem_block_t *freed;                   /* Memory freed by this transation (freed upon commit) */
-  int retries;                          /* Retries of the same transaction */
+  void *data;                           /* Transaction-specific data */
 #ifdef STATS
   unsigned long aborts;                 /* Total number of aborts (cumulative) */
 #endif
@@ -152,7 +153,7 @@ static pthread_key_t thread_tx;
 #define LOCK_SET_ADDR_OWNED(a)          (a | OWNED_MASK)    /* WRITE bit set */
 #define LOCK_SET_TIMESTAMP(t)           (t << 4)            /* WRITE bit not set */
 #define LOCK_SET_INCARNATION(i)         (i << 1)            /* WRITE bit not set */
-#define LOCK_UPD_INCARNATION(lock, i)   ((lock & ~(stm_word_t)INCARNATION_MASK) | LOCK_SET_INCARNATION(i))
+#define LOCK_UPD_INCARNATION(lock, i)   ((lock & ~(stm_word_t)(INCARNATION_MASK | OWNED_MASK)) | LOCK_SET_INCARNATION(i))
 #define LOCK_SET_VERSION(t, i)          (LOCK_SET_TIMESTAMP(t) | LOCK_SET_INCARNATION(i))
 
 #define VERSION_MAX                     (~(stm_word_t)0 >> 4)
@@ -217,7 +218,7 @@ int tx_overflow;
  */
 static inline void stm_enter_tx(stm_tx_t *tx)
 {
-  PRINT_DEBUG("==> stm_enter_tx(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
+  PRINT_DEBUG("==> stm_enter_tx(%p)\n", tx);
 
   pthread_mutex_lock(&tx_count_mutex);
   while (tx_overflow != 0)
@@ -292,7 +293,7 @@ static inline void stm_abort_self(stm_tx_t *tx)
   stm_abort(tx);
   /* Jump back to transaction start */
   if (tx->jmp != NULL)
-    longjmp(*tx->jmp, 1);
+    siglongjmp(*tx->jmp, 1);
 }
 
 /*
@@ -406,7 +407,7 @@ static inline void stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_word_t
 
   if (tx->ro) {
     /* Disable read-only and abort */
-    tx->ro = 0;
+    *tx->ro_hint = 0;
     stm_abort_self(tx);
     return;
   }
@@ -431,6 +432,11 @@ static inline void stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_word_t
         if (w->addr == addr) {
           if (mask == 0)
             return;
+          if (w->mask == 0) {
+            /* Remember old value */
+            w->value = ATOMIC_LOAD_MB(addr);
+            w->mask = mask;
+          }
           /* Yes: only write to memory */
           PRINT_DEBUG2("==> stm_write(t=%p[%lu-%lu],a=%p,l=%p,*l=%lu,d=%p-%lu,m=0x%lx)\n",
                        tx, (unsigned long)tx->start, (unsigned long)tx->end, addr, lock, (unsigned long)l, (void *)value, (unsigned long)value, (unsigned long)mask);
@@ -501,7 +507,7 @@ static inline void stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_word_t
   /* We store the old value of the lock (timestamp and incarnation) */
   w->version = l;
   w->lock = lock;
-  w->no_drop = (unsigned char)duplicate;
+  w->no_drop = duplicate;
 
   if (mask == 0)
     return;
@@ -809,8 +815,8 @@ stm_tx_t *stm_new(stm_tx_t *tx)
     perror("malloc");
     exit(1);
   }
-  /* Retries */
-  tx->retries = 0;
+  /* Transaction-specific data */
+  tx->data = NULL;
 #ifdef STATS
   /* Statistics */
   tx->aborts = 0;
@@ -824,7 +830,7 @@ stm_tx_t *stm_new(stm_tx_t *tx)
   stm_enter_tx(tx);
 #endif
 
-  PRINT_DEBUG("==> %p[%lu-%lu]\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
+  PRINT_DEBUG("==> %p\n", tx);
 
   return tx;
 }
@@ -857,7 +863,7 @@ stm_tx_t *stm_get_tx()
 /*
  * Called by the CURRENT thread to obtain an environment for setjmp/longjmp.
  */
-jmp_buf *stm_get_env(stm_tx_t *tx)
+sigjmp_buf *stm_get_env(stm_tx_t *tx)
 {
   return &tx->env;
 }
@@ -865,15 +871,15 @@ jmp_buf *stm_get_env(stm_tx_t *tx)
 /*
  * Called by the CURRENT thread to start a transaction.
  */
-void stm_start(stm_tx_t *tx, jmp_buf *env, int ro)
+void stm_start(stm_tx_t *tx, sigjmp_buf *env, int *ro)
 {
-  PRINT_DEBUG("==> stm_start(%p[%lu-%lu])\n", tx, (unsigned long)tx->start, (unsigned long)tx->end);
+  PRINT_DEBUG("==> stm_start(%p)\n", tx);
 
   /* Use setjmp/longjmp? */
   tx->jmp = env;
-  /* Read-only (set only upon first execution)? */
-  if (tx->retries == 0)
-    tx->ro = ro;
+  /* Read-only? */
+  tx->ro_hint = ro;
+  tx->ro = (ro == NULL ? 0 : *ro);
   /* Set status (no need for CAS or atomic op) */
   tx->status = TX_ACTIVE;
   /* Read/write set */
@@ -937,7 +943,7 @@ int stm_commit(stm_tx_t *tx)
     w = tx->w_set.entries + tx->w_set.nb_entries;
     while (w != tx->w_set.entries) {
       w--;
-      if (w->no_drop != 0)
+      if (w->no_drop)
         continue;
       /* No need for CAS (can only be modified by owner transaction) */
       if (i == 0) {
@@ -980,9 +986,6 @@ int stm_commit(stm_tx_t *tx)
     tx->freed = NULL;
   }
 
-  /* Reset number of retries */
-  tx->retries = 0;
-
   /* Set status (no need for CAS or atomic op) */
   tx->status = TX_COMMITTED;
 
@@ -1009,11 +1012,13 @@ void stm_abort(stm_tx_t *tx)
   w = tx->w_set.entries + tx->w_set.nb_entries;
   while (w != tx->w_set.entries) {
     w--;
+    PRINT_DEBUG2("==> undo(t=%p[%lu-%lu],a=%p,d=%p-%lu,v=%lu,m=0x%lx)\n",
+                 tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (unsigned long)w->value, (unsigned long)w->version, (unsigned long)w->mask);
     if (w->mask != 0) {
       /* No need for barrier */
       ATOMIC_STORE(w->addr, w->value);
     }
-    if (w->no_drop != 0)
+    if (w->no_drop)
       continue;
     /* Incarnation numbers allow readers to detect dirty reads */
     inc = LOCK_GET_INCARNATION(w->version) + 1;
@@ -1036,9 +1041,6 @@ void stm_abort(stm_tx_t *tx)
       /* Use new incarnation number */
       ATOMIC_STORE_MB(w->lock, LOCK_UPD_INCARNATION(w->version, inc));
     }
-
-    PRINT_DEBUG2("==> undo(t=%p[%lu-%lu],a=%p,d=%p-%lu,v=%lu)\n",
-                 tx, (unsigned long)tx->start, (unsigned long)tx->end, w->addr, (void *)w->value, (unsigned long)w->value, (unsigned long)w->version);
   }
 
   /* Dispose of memory allocated during transaction */
@@ -1068,11 +1070,16 @@ void stm_abort(stm_tx_t *tx)
   tx->aborts++;
 #endif
 
-  /* Increment number of retries */
-  tx->retries++;
-
   /* Set status (no need for CAS or atomic op) */
   tx->status = TX_ABORTED;
+}
+
+/*
+ * Called by the CURRENT thread to inquire about the status of a transaction.
+ */
+int stm_active(stm_tx_t *tx)
+{
+  return (tx->status == TX_ACTIVE);
 }
 
 /*
@@ -1095,4 +1102,20 @@ int stm_get_parameter(stm_tx_t *tx, const char *key, void *val)
   }
 #endif
   return 0;
+}
+
+/*
+ * Assign transaction-specific data.
+ */
+void stm_set_specific(stm_tx_t *tx, void *data)
+{
+  tx->data = data;
+}
+
+/*
+ * Returns transaction-specific data.
+ */
+void *stm_get_specific(stm_tx_t *tx)
+{
+  return tx->data;
 }

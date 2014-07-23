@@ -1,0 +1,22 @@
+[0.7.2 release]
+
+2007-09-13  Pascal Felber  <pascal.felber@unine.ch>
+
+	* Changed ro parameter of stm_start() to int*.
+	* Various minor fixes.
+
+2007-09-05  Pascal Felber  <pascal.felber@unine.ch>
+
+	* Added TANGER wrappers.
+	* Reorganized directories and makefiles.
+	* Added a simple regression test.
+	* Added stm_active() function.
+	* Added void stm_set_specific()/stm_get_specific() functions.
+	* Use sigsetjmp()/siglongjmp() instead of setjmp()/longjmp().
+	* Various minor fixes.
+
+[0.7.1 release]
+
+2007-08-27  Pascal Felber  <pascal.felber@unine.ch>
+
+	* Initial release.

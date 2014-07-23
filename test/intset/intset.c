@@ -38,8 +38,8 @@
 /* Note: stdio is thread-safe */
 #endif
 
-#define START                           { jmp_buf *_e = stm_get_env(tx); setjmp(*_e); stm_start(tx, _e, 0)
-#define START_RO                        { jmp_buf *_e = stm_get_env(tx); setjmp(*_e); stm_start(tx, _e, 1)
+#define START                           { sigjmp_buf *_e = stm_get_env(tx); sigsetjmp(*_e, 0); stm_start(tx, _e, NULL)
+#define START_RO                        { int _ro = 1; sigjmp_buf *_e = stm_get_env(tx); sigsetjmp(*_e, 0); stm_start(tx, _e, &_ro)
 #define LOAD(addr)                      stm_load(tx, (stm_word_t *)addr)
 #define STORE(addr, value)              stm_store(tx, (stm_word_t *)addr, (stm_word_t)value)
 #define COMMIT                          stm_commit(tx); }

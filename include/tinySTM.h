@@ -58,15 +58,18 @@ void stm_store2(stm_tx_t *tx, volatile stm_word_t *addr, stm_word_t value, stm_w
 stm_tx_t *stm_new(stm_tx_t *tx);
 void stm_delete(stm_tx_t *tx);
 stm_tx_t *stm_get_tx();
-jmp_buf *stm_get_env(stm_tx_t *tx);
+sigjmp_buf *stm_get_env(stm_tx_t *tx);
 
-void stm_start(stm_tx_t *tx, jmp_buf *env, int ro);
+void stm_start(stm_tx_t *tx, sigjmp_buf *env, int *ro);
 int stm_commit(stm_tx_t *tx);
 void stm_abort(stm_tx_t *tx);
 
+int stm_active(stm_tx_t *tx);
 int stm_aborted(stm_tx_t *tx);
 
 int stm_get_parameter(stm_tx_t *tx, const char *key, void *val);
+void *stm_get_specific(stm_tx_t *tx);
+void stm_set_specific(stm_tx_t *tx, void *data);
 
 #ifdef __cplusplus
 }

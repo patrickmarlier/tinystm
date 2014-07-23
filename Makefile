@@ -1,33 +1,46 @@
-CC ?= gcc
-AR ?= ar
+include Makefile.common
 
-# Path to LIBATOMIC_OPS
-LIBAO_HOME ?= /usr/local
+SRCDIR = $(ROOT)/src
+LIBDIR = $(ROOT)/lib
 
-CFLAGS += -Wall -Wno-unused-function -O3 -fno-strict-aliasing -DNDEBUG -D_REENTRANT
-CFLAGS += -I$(LIBAO_HOME)/include -Iinclude -Isrc
+CFLAGS += -I$(SRCDIR)/src
 CFLAGS += -DSTATS
 CFLAGS += -DROLL_OVER_CLOCK
 
-LDFLAGS += -L$(LIBAO_HOME)/lib -Llib -latomic_ops -ltstm -lpthread
-
 # Choose write-back or write-through version
-# VER = wb
-VER = wt
+VER = wb
+# VER = wt
 
-LIBS = lib/libtstm.a
-BINS = bin/intset bin/intset-rbtree
+LIBS = $(LIBDIR)/libtstm.a
+TLIBS = $(LIBDIR)/libtanger-stm.a $(LIBDIR)/libtanger-stm.bc
+TESTS = test/intset test/regression
 
-all:	$(LIBS) $(BINS)
+.PHONY:	all clean tanger test
+
+all:	$(LIBS)
+
+tanger:	$(TLIBS)
 
 %.o:	%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-lib/libtstm.a:	src/tinySTM-$(VER).o src/wrappers.o
+%.bc:	%.c
+	$(LLVMGCC) $(CFLAGS) -emit-llvm -c -o $@ $<
+
+$(LIBDIR)/libtstm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/wrappers.o
 	$(AR) cru $@ $^
 
-bin/%:	tests/%.o lib/libtstm.a
-	$(CC) -o $@ $< $(LDFLAGS)
+$(LIBDIR)/libtanger-stm.a:	$(SRCDIR)/tinySTM-$(VER).o $(SRCDIR)/wrappers.o $(SRCDIR)/tanger.o
+	$(AR) cru $@ $^
+
+$(LIBDIR)/libtanger-stm.bc:	$(SRCDIR)/tinySTM-$(VER).bc $(SRCDIR)/wrappers.bc $(SRCDIR)/tanger.bc
+	$(LLVMLD) -link-as-library -o $@ $^
+
+test:	$(LIBS)
+	$(MAKE) -C test
 
 clean:
-	rm -f $(LIBS) $(BINS) src/*.o tests/*.o
+	rm -f $(LIBS) $(TLIBS) $(SRCDIR)/*.o $(SRCDIR)/*.bc
+
+realclean:	clean
+	TARGET=clean $(MAKE) -C test
