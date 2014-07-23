@@ -3,10 +3,11 @@
  *   wrappers.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   STM wrapper functions for different data types.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,8 +27,9 @@
  *   of various sizes and for basic C data types.
  * @author
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2009
+ *   2007-2010
  */
 
 #ifndef _WRAPPERS_H_

@@ -3,10 +3,11 @@
  *   mod_stats.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   Module for gathering statistics about transactions.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -22,15 +23,16 @@
 /**
  * @file
  *   Module for gathering statistics about transactions.  This module
- *   maintain both aggregate statistics about all threads (aggregates
+ *   maintains both aggregate statistics about all threads (aggregates
  *   are updated upon thread cleanup) and per-thread statistics.  The
  *   built-in statistics of the core STM library are more efficient and
  *   detailed but this module is useful in case the library is compiled
  *   without support for statistics.
  * @author
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2009
+ *   2007-2010
  */
 
 #ifndef _MOD_STATS_H_

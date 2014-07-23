@@ -3,10 +3,11 @@
  *   wrappers.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   STM wrapper functions for different data types.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,6 +27,16 @@
 #define COMPILE_TIME_ASSERT(pred)       switch (0) { case 0: case pred: ; }
 
 #define ALLOW_MISALIGNED_ACCESSES
+
+#ifdef HYBRID_ASF
+# define TM_LOAD     tm_load
+# define TM_STORE    tm_store
+# define TM_STORE2   tm_store2
+#else /* ! HYBRID_ASF */
+# define TM_LOAD     stm_load
+# define TM_STORE    stm_store
+# define TM_STORE2   stm_store2
+#endif /* ! HYBRID_ASF */ 
 
 typedef union convert_64 {
   uint64_t u64;
@@ -80,11 +91,11 @@ uint8_t stm_load_u8(TXPARAMS volatile uint8_t *addr)
 {
   if (sizeof(stm_word_t) == 4) {
     convert_32_t val;
-    val.u32 = (uint32_t)stm_load(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03));
+    val.u32 = (uint32_t)TM_LOAD(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03));
     return val.u8[(uintptr_t)addr & 0x03];
   } else {
     convert_64_t val;
-    val.u64 = (uint64_t)stm_load(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07));
+    val.u64 = (uint64_t)TM_LOAD(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07));
     return val.u8[(uintptr_t)addr & 0x07];
   }
 }
@@ -97,11 +108,11 @@ uint16_t stm_load_u16(TXPARAMS volatile uint16_t *addr)
     return val;
   } else if (sizeof(stm_word_t) == 4) {
     convert_32_t val;
-    val.u32 = (uint32_t)stm_load(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03));
+    val.u32 = (uint32_t)TM_LOAD(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03));
     return val.u16[((uintptr_t)addr & 0x03) >> 1];
   } else {
     convert_64_t val;
-    val.u64 = (uint64_t)stm_load(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07));
+    val.u64 = (uint64_t)TM_LOAD(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07));
     return val.u16[((uintptr_t)addr & 0x07) >> 1];
   }
 }
@@ -113,10 +124,10 @@ uint32_t stm_load_u32(TXPARAMS volatile uint32_t *addr)
     stm_load_bytes(TXARGS (volatile uint8_t *)addr, (uint8_t *)&val, sizeof(uint32_t));
     return val;
   } else if (sizeof(stm_word_t) == 4) {
-    return (uint32_t)stm_load(TXARGS (volatile stm_word_t *)addr);
+    return (uint32_t)TM_LOAD(TXARGS (volatile stm_word_t *)addr);
   } else {
     convert_64_t val;
-    val.u64 = (uint64_t)stm_load(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07));
+    val.u64 = (uint64_t)TM_LOAD(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07));
     return val.u32[((uintptr_t)addr & 0x07) >> 2];
   }
 }
@@ -129,11 +140,11 @@ uint64_t stm_load_u64(TXPARAMS volatile uint64_t *addr)
     return val;
   } else if (sizeof(stm_word_t) == 4) {
     convert_64_t val;
-    val.u32[0] = (uint32_t)stm_load(TXARGS (volatile stm_word_t *)addr);
-    val.u32[1] = (uint32_t)stm_load(TXARGS (volatile stm_word_t *)addr + 1);
+    val.u32[0] = (uint32_t)TM_LOAD(TXARGS (volatile stm_word_t *)addr);
+    val.u32[1] = (uint32_t)TM_LOAD(TXARGS (volatile stm_word_t *)addr + 1);
     return val.u64;
   } else {
-    return (uint64_t)stm_load(TXARGS (volatile stm_word_t *)addr);
+    return (uint64_t)TM_LOAD(TXARGS (volatile stm_word_t *)addr);
   }
 }
 
@@ -212,7 +223,7 @@ double stm_load_double(TXPARAMS volatile double *addr)
 void *stm_load_ptr(TXPARAMS volatile void **addr)
 {
   union { stm_word_t w; void *v; } convert;
-  convert.w = stm_load(TXARGS (stm_word_t *)addr);
+  convert.w = TM_LOAD(TXARGS (stm_word_t *)addr);
   return convert.v;
 }
 
@@ -228,7 +239,7 @@ void stm_load_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size)
   if (i != 0) {
     /* First bytes */
     a = (stm_word_t *)((uintptr_t)addr & ~(uintptr_t)(sizeof(stm_word_t) - 1));
-    val.w = stm_load(TXARGS a++);
+    val.w = TM_LOAD(TXARGS a++);
     for (; i < sizeof(stm_word_t) && size > 0; i++, size--)
       *buf++ = val.b[i];
   } else
@@ -236,10 +247,10 @@ void stm_load_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size)
   /* Full words */
   while (size >= sizeof(stm_word_t)) {
 #ifdef ALLOW_MISALIGNED_ACCESSES
-    *((stm_word_t *)buf) = stm_load(TXARGS a++);
+    *((stm_word_t *)buf) = TM_LOAD(TXARGS a++);
     buf += sizeof(stm_word_t);
 #else /* ! ALLOW_MISALIGNED_ACCESSES */
-    val.w = stm_load(TXARGS a++);
+    val.w = TM_LOAD(TXARGS a++);
     for (i = 0; i < sizeof(stm_word_t); i++)
       *buf++ = val.b[i];
 #endif /* ! ALLOW_MISALIGNED_ACCESSES */
@@ -247,7 +258,7 @@ void stm_load_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size)
   }
   if (size > 0) {
     /* Last bytes */
-    val.w = stm_load(TXARGS a);
+    val.w = TM_LOAD(TXARGS a);
     i = 0;
     for (i = 0; size > 0; i++, size--)
       *buf++ = val.b[i];
@@ -265,13 +276,13 @@ void stm_store_u8(TXPARAMS volatile uint8_t *addr, uint8_t value)
     val.u8[(uintptr_t)addr & 0x03] = value;
     mask.u32 = 0;
     mask.u8[(uintptr_t)addr & 0x03] = ~(uint8_t)0;
-    stm_store2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03), (stm_word_t)val.u32, (stm_word_t)mask.u32);
+    TM_STORE2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03), (stm_word_t)val.u32, (stm_word_t)mask.u32);
   } else {
     convert_64_t val, mask;
     val.u8[(uintptr_t)addr & 0x07] = value;
     mask.u64 = 0;
     mask.u8[(uintptr_t)addr & 0x07] = ~(uint8_t)0;
-    stm_store2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07), (stm_word_t)val.u64, (stm_word_t)mask.u64);
+    TM_STORE2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07), (stm_word_t)val.u64, (stm_word_t)mask.u64);
   }
 }
 
@@ -284,13 +295,13 @@ void stm_store_u16(TXPARAMS volatile uint16_t *addr, uint16_t value)
     val.u16[((uintptr_t)addr & 0x03) >> 1] = value;
     mask.u32 = 0;
     mask.u16[((uintptr_t)addr & 0x03) >> 1] = ~(uint16_t)0;
-    stm_store2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03), (stm_word_t)val.u32, (stm_word_t)mask.u32);
+    TM_STORE2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x03), (stm_word_t)val.u32, (stm_word_t)mask.u32);
   } else {
     convert_64_t val, mask;
     val.u16[((uintptr_t)addr & 0x07) >> 1] = value;
     mask.u64 = 0;
     mask.u16[((uintptr_t)addr & 0x07) >> 1] = ~(uint16_t)0;
-    stm_store2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07), (stm_word_t)val.u64, (stm_word_t)mask.u64);
+    TM_STORE2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07), (stm_word_t)val.u64, (stm_word_t)mask.u64);
   }
 }
 
@@ -299,13 +310,13 @@ void stm_store_u32(TXPARAMS volatile uint32_t *addr, uint32_t value)
   if (((uintptr_t)addr & 0x03) != 0) {
     stm_store_bytes(TXARGS (volatile uint8_t *)addr, (uint8_t *)&value, sizeof(uint32_t));
   } else if (sizeof(stm_word_t) == 4) {
-    stm_store(TXARGS (volatile stm_word_t *)addr, (stm_word_t)value);
+    TM_STORE(TXARGS (volatile stm_word_t *)addr, (stm_word_t)value);
   } else {
     convert_64_t val, mask;
     val.u32[((uintptr_t)addr & 0x07) >> 2] = value;
     mask.u64 = 0;
     mask.u32[((uintptr_t)addr & 0x07) >> 2] = ~(uint32_t)0;
-    stm_store2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07), (stm_word_t)val.u64, (stm_word_t)mask.u64);
+    TM_STORE2(TXARGS (volatile stm_word_t *)((uintptr_t)addr & ~(uintptr_t)0x07), (stm_word_t)val.u64, (stm_word_t)mask.u64);
   }
 }
 
@@ -316,10 +327,10 @@ void stm_store_u64(TXPARAMS volatile uint64_t *addr, uint64_t value)
   } else if (sizeof(stm_word_t) == 4) {
     convert_64_t val;
     val.u64 = value;
-    stm_store(TXARGS (volatile stm_word_t *)addr, (stm_word_t)val.u32[0]);
-    stm_store(TXARGS (volatile stm_word_t *)addr + 1, (stm_word_t)val.u32[1]);
+    TM_STORE(TXARGS (volatile stm_word_t *)addr, (stm_word_t)val.u32[0]);
+    TM_STORE(TXARGS (volatile stm_word_t *)addr + 1, (stm_word_t)val.u32[1]);
   } else {
-    return stm_store(TXARGS (volatile stm_word_t *)addr, (stm_word_t)value);
+    return TM_STORE(TXARGS (volatile stm_word_t *)addr, (stm_word_t)value);
   }
 }
 
@@ -399,7 +410,7 @@ void stm_store_ptr(TXPARAMS volatile void **addr, void *value)
 {
   union { stm_word_t w; void *v; } convert;
   convert.v = value;
-  stm_store(TXARGS (stm_word_t *)addr, convert.w);
+  TM_STORE(TXARGS (stm_word_t *)addr, convert.w);
 }
 
 void stm_store_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size)
@@ -419,18 +430,18 @@ void stm_store_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size)
       mask.b[i] = 0xFF;
       val.b[i] = *buf++;
     }
-    stm_store2(TXARGS a++, val.w, mask.w);
+    TM_STORE2(TXARGS a++, val.w, mask.w);
   } else
     a = (stm_word_t *)addr;
   /* Full words */
   while (size >= sizeof(stm_word_t)) {
 #ifdef ALLOW_MISALIGNED_ACCESSES
-    stm_store(TXARGS a++, *((stm_word_t *)buf));
+    TM_STORE(TXARGS a++, *((stm_word_t *)buf));
     buf += sizeof(stm_word_t);
 #else /* ! ALLOW_MISALIGNED_ACCESSES */
     for (i = 0; i < sizeof(stm_word_t); i++)
       val.b[i] = *buf++;
-    stm_store(TXARGS a++, val.w);
+    TM_STORE(TXARGS a++, val.w);
 #endif /* ! ALLOW_MISALIGNED_ACCESSES */
     size -= sizeof(stm_word_t);
   }
@@ -441,7 +452,7 @@ void stm_store_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size)
       mask.b[i] = 0xFF;
       val.b[i] = *buf++;
     }
-    stm_store2(TXARGS a, val.w, mask.w);
+    TM_STORE2(TXARGS a, val.w, mask.w);
   }
 }
 
@@ -464,12 +475,12 @@ void stm_set_bytes(TXPARAMS volatile uint8_t *addr, uint8_t byte, size_t count)
     mask.w = 0;
     for (; i < sizeof(stm_word_t) && count > 0; i++, count--)
       mask.b[i] = 0xFF;
-    stm_store2(TXARGS a++, val.w, mask.w);
+    TM_STORE2(TXARGS a++, val.w, mask.w);
   } else
     a = (stm_word_t *)addr;
   /* Full words */
   while (count >= sizeof(stm_word_t)) {
-    stm_store(TXARGS a++, val.w);
+    TM_STORE(TXARGS a++, val.w);
     count -= sizeof(stm_word_t);
   }
   if (count > 0) {
@@ -477,6 +488,11 @@ void stm_set_bytes(TXPARAMS volatile uint8_t *addr, uint8_t byte, size_t count)
     mask.w = 0;
     for (i = 0; count > 0; i++, count--)
       mask.b[i] = 0xFF;
-    stm_store2(TXARGS a, val.w, mask.w);
+    TM_STORE2(TXARGS a, val.w, mask.w);
   }
 }
+
+#undef TM_LOAD
+#undef TM_STORE
+#undef TM_STORE2
+

@@ -565,8 +565,9 @@ WARN_LOGFILE           =
 
 INPUT                  = include/stm.h \
                          include/wrappers.h \
+                         include/mod_ab.h \
                          include/mod_cb.h \
-                         include/mod_local.h \
+                         include/mod_log.h \
                          include/mod_mem.h \
                          include/mod_print.h \
                          include/mod_stats.h

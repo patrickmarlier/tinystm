@@ -3,10 +3,11 @@
  *   mod_cb.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   Module for user callback.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,7 +35,7 @@
 typedef struct mod_cb_entry {           /* Callback entry */
   void (*f)(void *);                    /* Function */
   void *arg;                            /* Argument to be passed to function */
-  struct mod_cb_entry * next;           /* Next callback */
+  struct mod_cb_entry *next;            /* Next callback */
 } mod_cb_entry_t;
 
 typedef struct mod_cb_info {

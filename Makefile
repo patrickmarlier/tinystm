@@ -74,10 +74,10 @@ DEFINES += -DDESIGN=WRITE_BACK_ETL
 ########################################################################
 
 # Pick one contention manager (CM)
-# DEFINES += -DCM=CM_SUICIDE
+DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_DELAY
 # DEFINES += -DCM=CM_BACKOFF
-DEFINES += -DCM=CM_MODULAR
+# DEFINES += -DCM=CM_MODULAR
 
 ########################################################################
 # Enable irrevocable mode (required for using the library with a
@@ -186,6 +186,38 @@ DEFINES += -UDEBUG
 DEFINES += -UDEBUG2
 
 ########################################################################
+# Catch SIGBUS and SIGSEGV signals
+########################################################################
+
+# DEFINES += -DSIGNAL_HANDLER
+DEFINES += -USIGNAL_HANDLER
+
+########################################################################
+# Enable ASF Hybrid mode
+########################################################################
+
+ifdef HYBRID_ASF
+  DEFINES += -DHYBRID_ASF -DASF_STACK -fomit-frame-pointer
+else
+  DEFINES += -UHYBRID_ASF
+endif
+
+# TODO Enable the construction of 32bit lib on 64bit environment 
+
+########################################################################
+# Enable the use of libatomic_ops
+# LIBAO_HOME must be set to the path of libatomic_ops
+# (use the compiler atomic builtins by default)
+########################################################################
+ifdef LIBAO_HOME
+  LIBAO_INC = $(LIBAO_HOME)/include
+  CFLAGS += -I$(LIBAO_INC)
+else
+  DEFINES += -ULIBAO_HOME
+endif
+
+
+########################################################################
 # Various default values can also be overridden:
 #
 # RW_SET_SIZE (default=4096): initial size of the read and write
@@ -249,7 +281,7 @@ CFLAGS += $(DEFINES)
 
 MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
 
-.PHONY:	all doc test tanger clean
+.PHONY:	all doc test abi clean check
 
 all:	$(TMLIB)
 
@@ -268,13 +300,23 @@ $(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(GC) $(MODULES)
 test:	$(TMLIB)
 	$(MAKE) -C test
 
-tanger:
-	$(MAKE) -C tanger
+abi:
+	$(MAKE) -C abi
+
+abi-%: 	
+	$(MAKE) -C abi $(subst abi-,,$@)
 
 doc:
 	$(DOXYGEN)
 
+check: 	$(TMLIB)
+	$(MAKE) -C test check
+
+# TODO add an install rule
+#install: 	$(TMLIB)
+
 clean:
 	rm -f $(TMLIB) $(SRCDIR)/*.o
-	$(MAKE) -C tanger clean
+	$(MAKE) -C abi clean
 	TARGET=clean $(MAKE) -C test
+

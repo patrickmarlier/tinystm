@@ -3,10 +3,11 @@
  *   stm.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   STM functions.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,8 +26,9 @@
  *   programming with STM.
  * @author
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2009
+ *   2007-2010
  */
 
 /**
@@ -50,9 +52,10 @@
  * @section install_sec Installation
  *
  *   TinySTM requires the atomic_ops library, freely available from
- *   http://www.hpl.hp.com/research/linux/atomic_ops/.  The environment
- *   variable <c>LIBAO_HOME</c> must be set to the installation
- *   directory of atomic_ops.
+ *   http://www.hpl.hp.com/research/linux/atomic_ops/.  A stripped-down
+ *   version of the library is included in the TinySTM distribution.  If you
+ *   wish to use another version, you must set the environment variable
+ *   <c>LIBAO_HOME</c> to the installation directory of atomic_ops.
  *
  *   If your system does not support GCC thread-local storage, set the
  *   environment variable <c>NOTLS</c> to a non-empty value before
@@ -75,10 +78,12 @@
 # include <stdio.h>
 # include <stdlib.h>
 
+# include "../src/atomic.h" // FIXME atomic.h should be in include/ ?
+
 /* Version string */
-# define STM_VERSION                    "1.0.0"
+# define STM_VERSION                    "1.0.1"
 /* Version number (times 100) */
-# define STM_VERSION_NB                 100
+# define STM_VERSION_NB                 101
 
 # ifdef __cplusplus
 extern "C" {
@@ -140,11 +145,26 @@ typedef struct stm_tx_attr {
    */
   unsigned int read_only : 1;
   /**
+   * Indicates whether the transaction should use visible reads.  This
+   * information is used when the transaction starts or restarts.  If a
+   * transaction automatically switches to visible read mode (e.g.,
+   * after having repeatedly aborted with invisible reads), this flag is
+   * updated accordingly.  If no attributes are specified when starting
+   * a transaction, the default behavior is to use invisible reads.
+   */
+  unsigned int visible_reads : 1;
+  /**
    * Indicates that the transaction should not retry execution using
    * sigsetjmp() after abort.  If no attributes are specified when
    * starting a transaction, the default behavior is to retry.
    */
   unsigned int no_retry : 1;
+  /**
+   * Indicates how soon the transaction should be completed.  This
+   * information may be used by a contention manager or the scheduler to
+   * prioritize transactions.
+   */
+  stm_word_t deadline;
 } stm_tx_attr_t;
 
 /**
@@ -248,8 +268,9 @@ void stm_exit_thread(TXPARAM);
  * Start a transaction.
  *
  * @param attr
- *   Specifies optional attributes associated to the transaction.  If
- *   null, the transaction uses default attributes.
+ *   Specifies optional attributes associated to the transaction.
+ *   Attributes are copied in transaction-local storage.  If null, the
+ *   transaction uses default attributes.
  * @return
  *   Environment (stack context) to be used to jump back upon abort.  It
  *   is the responsibility of the application to call sigsetjmp()
@@ -577,6 +598,22 @@ stm_word_t stm_get_clock();
  *   1 upon success, 0 otherwise.
  */
 int stm_set_irrevocable(TXPARAMS int serial);
+
+#ifdef HYBRID_ASF
+sigjmp_buf *hytm_start(TXPARAMS stm_tx_attr_t *attr);
+int hytm_commit(TXPARAM);
+void hytm_abort(TXPARAMS int abort_reason);
+stm_word_t hytm_load(TXPARAMS volatile stm_word_t *addr);
+void hytm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
+void hytm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
+
+sigjmp_buf *tm_start(TXPARAMS stm_tx_attr_t *attr);
+int tm_commit(TXPARAM);
+void tm_abort(TXPARAMS int abort_reason);
+stm_word_t tm_load(TXPARAMS volatile stm_word_t *addr);
+void tm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
+void tm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
+#endif /* HYBRID_ASF */
 
 #ifdef __cplusplus
 }

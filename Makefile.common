@@ -2,6 +2,7 @@
 ROOT ?= .
 
 CC ?= gcc
+LD ?= gcc
 AR ?= ar
 DOXYGEN ?= doxygen
 UNIFDEF ?= unifdef
@@ -20,15 +21,10 @@ SRCDIR = $(ROOT)/src
 INCDIR = $(ROOT)/include
 LIBDIR = $(ROOT)/lib
 
-# Path to LIBATOMIC_OPS
-ifdef LIBAO_HOME
-  LIBAO_INC = $(LIBAO_HOME)/include
-else
-  LIBAO_INC = $(SRCDIR)/atomic_ops
-endif
-
-CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -D_REENTRANT
-CFLAGS += -I$(LIBAO_INC) -I$(INCDIR) -I$(SRCDIR)
+#TODO to test if callq  0x4014d8 <__stack_chk_fail@plt> appears in O3 code
+#CFLAGS += -fno-stack-protector
+CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -fno-stack-protector -D_REENTRANT
+CFLAGS += -I$(INCDIR) -I$(SRCDIR)
 
 LDFLAGS += -L$(LIBDIR) -l$(TM) -lpthread
 

@@ -15,9 +15,10 @@ list, and a red-black tree.
 INSTALLATION:
 
 TinySTM requires the atomic_ops library, freely available from
-http://www.hpl.hp.com/research/linux/atomic_ops/.  The environment
-variable LIBAO_HOME must be set to the installation directory of
-atomic_ops.
+http://www.hpl.hp.com/research/linux/atomic_ops/.  A stripped-down
+version of the library is included in the TinySTM distribution.  If you
+wish to use another version, you must set the environment variable
+LIBAO_HOME to the installation directory of atomic_ops.
 
 If your system does not support GCC thread-local storage, set the
 environment variable NOTLS to a non-empty value before compilation.

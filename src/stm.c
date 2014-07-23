@@ -3,10 +3,11 @@
  *   stm.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   STM functions.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,6 +33,12 @@
 #include "atomic.h"
 #include "gc.h"
 
+#ifdef HYBRID_ASF
+# include "asf/asf-highlevel.h"
+/* Number of hybrid tx aborts before to switch to pure software transaction */
+# define ASF_ABORT_THRESHOLD             (16)
+#endif /* HYBRID_ASF */
+
 /* ################################################################### *
  * DEFINES
  * ################################################################### */
@@ -40,7 +47,10 @@
 #if defined(__GNUC__) || defined(__INTEL_COMPILER)
 # define likely(x)                      __builtin_expect(!!(x), 1)
 # define unlikely(x)                    __builtin_expect(!!(x), 0)
-#endif /* defined(__GNUC__) || defined(__INTEL_COMPILER) */
+#else /* ! (defined(__GNUC__) || defined(__INTEL_COMPILER)) */
+# define likely(x)                      (x)
+# define unlikely(x)                    (x)
+#endif /* ! (defined(__GNUC__) || defined(__INTEL_COMPILER)) */
 
 /* Designs */
 #define WRITE_BACK_ETL                  0
@@ -89,6 +99,14 @@ static const char *cm_names[] = {
 #if defined(READ_LOCKED_DATA) && CM != CM_MODULAR
 # error "READ_LOCKED_DATA can only be used with MODULAR contention manager"
 #endif /* defined(READ_LOCKED_DATA) && CM != CM_MODULAR */
+
+#if defined(EPOCH_GC) && defined(SIGNAL_HANDLER)
+# error "SIGNAL_HANDLER can only be used without EPOCH_GC"
+#endif /* defined(EPOCH_GC) && defined(SIGNAL_HANDLER) */
+
+#if defined(HYBRID_ASF) && CM != CM_SUICIDE
+# error "HYBRID_ASF can only be used with SUICIDE contention manager"
+#endif /* defined(HYBRID_ASF) && CM != CM_SUICIDE */
 
 #ifdef EXPLICIT_TX_PARAMETER
 # define TX_RETURN                      return tx
@@ -212,6 +230,7 @@ typedef struct w_entry {                /* Write set entry */
 #endif /* DESIGN != WRITE_BACK_ETL */
     };
     stm_word_t padding[8];              /* Padding (multiple of a cache line) */
+    /* TODO Check if padding is really usefull? */
   };
 } w_entry_t;
 
@@ -240,7 +259,7 @@ typedef struct cb_entry {               /* Callback entry */
 
 typedef struct stm_tx {                 /* Transaction descriptor */
   sigjmp_buf env;                       /* Environment for setjmp/longjmp (must be first field!) */
-  stm_tx_attr_t *attr;                  /* Transaction attributes (user-specified) */
+  stm_tx_attr_t attr;                   /* Transaction attributes (user-specified) */
   volatile stm_word_t status;           /* Transaction status */
   stm_word_t start;                     /* Start timestamp */
   stm_word_t end;                       /* End timestamp (validity range) */
@@ -248,9 +267,15 @@ typedef struct stm_tx {                 /* Transaction descriptor */
   w_set_t w_set;                        /* Write set */
   unsigned int ro:1;                    /* Is this execution read-only? */
   unsigned int can_extend:1;            /* Can this transaction be extended? */
+#if CM == CM_MODULAR
+  unsigned int vr:1;                    /* Does this execution use visible reads? */
+#endif /* CM == CM_MODULAR */
 #ifdef IRREVOCABLE_ENABLED
   unsigned int irrevocable:4;           /* Is this execution irrevocable? */
 #endif /* IRREVOCABLE_ENABLED */
+#ifdef HYBRID_ASF
+  unsigned int software:1;              /* Is the transaction mode pure software? */
+#endif /* HYBRID_ASF */
   int nesting;                          /* Nesting level */
 #if CM == CM_MODULAR
   stm_word_t timestamp;                 /* Timestamp (not changed upon restart) */
@@ -270,9 +295,9 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #if CM == CM_MODULAR
   int visible_reads;                    /* Should we use visible reads? */
 #endif /* CM == CM_MODULAR */
-#if CM == CM_MODULAR || defined(INTERNAL_STATS)
+#if CM == CM_MODULAR || defined(INTERNAL_STATS) || defined(HYBRID_ASF)
   unsigned long retries;                /* Number of consecutive aborts (retries) */
-#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) */
+#endif /* CM == CM_MODULAR || defined(INTERNAL_STATS) || defined(HYBRID_ASF) */
 #ifdef INTERNAL_STATS
   unsigned long aborts;                 /* Total number of aborts (cumulative) */
   unsigned long aborts_1;               /* Total number of transactions that abort once or more (cumulative) */
@@ -299,13 +324,16 @@ static int nb_specific = 0;             /* Number of specific slots used (<= MAX
 
 static int initialized = 0;             /* Has the library been initialized? */
 
-pthread_mutex_t quiesce_mutex;          /* Mutex to support quiescence */
-pthread_cond_t quiesce_cond;            /* Condition variable to support quiescence */
-volatile stm_word_t quiesce;            /* Prevent threads from entering transactions upon quiescence */
-volatile stm_word_t threads_count;      /* Number of active threads */
-stm_tx_t *threads;                      /* Head of linked list of threads */
+static pthread_mutex_t quiesce_mutex;   /* Mutex to support quiescence */
+static pthread_cond_t quiesce_cond;     /* Condition variable to support quiescence */
+static volatile stm_word_t quiesce;     /* Prevent threads from entering transactions upon quiescence */
+static volatile stm_word_t threads_nb;  /* Number of active threads */
+static stm_tx_t *threads;               /* Head of linked list of threads */
+
+static stm_tx_attr_t default_attributes = { 0, 0, 0, 0, 0 };
 
 #ifdef IRREVOCABLE_ENABLED
+// TODO put this value in a cacheline
 static volatile stm_word_t irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
 
@@ -602,7 +630,7 @@ static inline void stm_quiesce_init()
     exit(1);
   }
   quiesce = 0;
-  threads_count = 0;
+  threads_nb = 0;
   threads = NULL;
 }
 
@@ -628,7 +656,7 @@ static inline void stm_quiesce_enter_thread(stm_tx_t *tx)
   /* Add new descriptor at head of list */
   tx->next = threads;
   threads = tx;
-  threads_count++;
+  threads_nb++;
   pthread_mutex_unlock(&quiesce_mutex);
 }
 
@@ -657,7 +685,7 @@ static inline void stm_quiesce_exit_thread(stm_tx_t *tx)
     threads = t->next;
   else
     p->next = t->next;
-  threads_count--;
+  threads_nb--;
   if (quiesce) {
     /* Wake up someone in case other threads are waiting for us */
     pthread_cond_signal(&quiesce_cond);
@@ -677,13 +705,13 @@ static inline void stm_quiesce_barrier(stm_tx_t *tx, void (*f)(void *), void *ar
 
   pthread_mutex_lock(&quiesce_mutex);
   /* Wait for all other transactions to block on barrier */
-  threads_count--;
+  threads_nb--;
   if (quiesce == 0) {
     /* We are first on the barrier */
     quiesce = 1;
   }
   while (quiesce) {
-    if (threads_count == 0) {
+    if (threads_nb == 0) {
       /* Everybody is blocked */
       if (f != NULL)
         f(arg);
@@ -695,7 +723,7 @@ static inline void stm_quiesce_barrier(stm_tx_t *tx, void (*f)(void *), void *ar
       pthread_cond_wait(&quiesce_cond, &quiesce_mutex);
     }
   }
-  threads_count++;
+  threads_nb++;
   pthread_mutex_unlock(&quiesce_mutex);
 }
 
@@ -721,9 +749,9 @@ static inline int stm_quiesce(stm_tx_t *tx, int block)
   }
   /* We own the lock at this point */
   if (block)
-    ATOMIC_STORE_REL(&quiesce, 2); // FIXME
+    ATOMIC_STORE_REL(&quiesce, 2);
   /* Make sure we read latest status data */
-  ATOMIC_MB_FULL; // FIXME
+  ATOMIC_MB_FULL;
   /* Not optimal as we check transaction sequentially and might miss some inactivity states */
   for (t = threads; t != NULL; t = t->next) {
     if (t == tx)
@@ -738,7 +766,6 @@ static inline int stm_quiesce(stm_tx_t *tx, int block)
       } while (IS_ACTIVE(s) && c == GET_STATUS_COUNTER(s));
     }
 #else /* CM != CM_MODULAR */
-//    while (ATOMIC_LOAD(&t->status) != TX_IDLE) // FIXME
     while (IS_ACTIVE(t->status))
       ;
 #endif /* CM != CM_MODULAR */
@@ -764,11 +791,11 @@ static inline int stm_check_quiesce(stm_tx_t *tx)
     return 0;
   }
 #endif
-  ATOMIC_MB_FULL; // FIXME
-  if (ATOMIC_LOAD_ACQ(&quiesce) == 2) { // FIXME
+  ATOMIC_MB_FULL;
+  if (ATOMIC_LOAD_ACQ(&quiesce) == 2) {
     s = ATOMIC_LOAD(&tx->status);
     SET_STATUS(tx->status, TX_IDLE);
-    while (ATOMIC_LOAD_ACQ(&quiesce) == 2) { // FIXME
+    while (ATOMIC_LOAD_ACQ(&quiesce) == 2) {
 #ifdef WAIT_YIELD
       sched_yield();
 #endif /* WAIT_YIELD */
@@ -784,7 +811,7 @@ static inline int stm_check_quiesce(stm_tx_t *tx)
  */
 static inline void stm_quiesce_release(stm_tx_t *tx)
 {
-  ATOMIC_STORE_REL(&quiesce, 0); // FIXME
+  ATOMIC_STORE_REL(&quiesce, 0);
   pthread_mutex_unlock(&quiesce_mutex);
 }
 
@@ -1109,13 +1136,10 @@ static inline void stm_drop(stm_tx_t *tx)
 static inline void stm_prepare(stm_tx_t *tx)
 {
 #if CM == CM_MODULAR
-  if (tx->visible_reads >= vr_threshold && vr_threshold >= 0) {
+  if (!tx->vr && (tx->attr.visible_reads || (tx->visible_reads >= vr_threshold && vr_threshold >= 0))) {
     /* Use visible read */
-    if (tx->attr != NULL && tx->attr->read_only) {
-      /* Update attributes to inform the caller */
-      tx->attr->read_only = 0;
-    }
-    tx->ro = 0;
+    tx->vr = tx->attr.visible_reads = 1;
+    tx->ro = tx->attr.read_only = 0;
   }
 #endif /* CM == CM_MODULAR */
  start:
@@ -1152,7 +1176,6 @@ static inline void stm_prepare(stm_tx_t *tx)
 #ifdef IRREVOCABLE_ENABLED
   if (tx->irrevocable != 0) {
     assert(!IS_ACTIVE(tx->status));
-    // UPDATE_STATUS(tx->status, TX_IDLE); // FIXME
     stm_set_irrevocable(TXARGS -1);
     UPDATE_STATUS(tx->status, TX_IRREVOCABLE);
   } else
@@ -1206,6 +1229,9 @@ static inline void stm_rollback(stm_tx_t *tx, int reason)
   w = tx->w_set.entries + tx->w_set.nb_entries;
   while (w != tx->w_set.entries) {
     w--;
+    /* TODO stm_release */
+    //if (w->addr == NULL)
+      //continue;
     if (w->mask != 0)
       ATOMIC_STORE(w->addr, w->value);
     if (w->no_drop)
@@ -1230,6 +1256,9 @@ static inline void stm_rollback(stm_tx_t *tx, int reason)
   if (i > 0) {
     w = tx->w_set.entries;
     for (; i > 0; i--, w++) {
+      /* TODO stm_release */
+      //if (w->addr == NULL)
+        //continue;
       if (w->next == NULL) {
         /* Only drop lock for last covered address in write set */
         ATOMIC_STORE(w->lock, LOCK_SET_TIMESTAMP(w->version));
@@ -1314,9 +1343,17 @@ static inline void stm_rollback(stm_tx_t *tx, int reason)
   /* Reset field to restart transaction */
   stm_prepare(tx);
 
+#ifdef TM_DTMC
+  tanger_stm_stack_restorehack();
+#endif /* TM_DTMC */
   /* Jump back to transaction start */
-  if (tx->attr == NULL || !tx->attr->no_retry)
-    siglongjmp(tx->env, reason);
+  /* TODO : to test because I changed value of reason */
+  if (!tx->attr.no_retry)
+#if defined(TM_DTMC)
+    siglongjmp(tx->env, 0x01); /* ABI 0x01 = runInstrumented, DTMC explicitly needs 1 */
+#else /* ! defined(TM_DTMC) */
+    siglongjmp(tx->env, 0x09 | reason); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
+#endif /* ! defined(TM_DTMC) */
 }
 
 /*
@@ -1764,9 +1801,7 @@ static inline w_entry_t *stm_write(stm_tx_t *tx, volatile stm_word_t *addr, stm_
 
   if (tx->ro) {
     /* Disable read-only and abort */
-    assert(tx->attr != NULL);
-    /* Update attributes to inform the caller */
-    tx->attr->read_only = 0;
+    tx->attr.read_only = 0;
 #ifdef INTERNAL_STATS
     tx->aborts_ro++;
 #endif /* INTERNAL_STATS */
@@ -2108,6 +2143,7 @@ static inline int stm_unit_write(volatile stm_word_t *addr, stm_word_t value, st
   return 1;
 }
 
+#ifdef SIGNAL_HANDLER
 /*
  * Catch signal (to emulate non-faulting load).
  */
@@ -2118,18 +2154,19 @@ static void signal_catcher(int sig)
   /* A fault might only occur upon a load concurrent with a free (read-after-free) */
   PRINT_DEBUG("Caught signal: %d\n", sig);
 
-  if (tx == NULL || (tx->attr != NULL && tx->attr->no_retry)) {
+  if (tx == NULL || tx->attr.no_retry) {
     /* There is not much we can do: execution will restart at faulty load */
     fprintf(stderr, "Error: invalid memory accessed and no longjmp destination\n");
     exit(1);
   }
 
-#ifdef INTERNAL_STATS
+# ifdef INTERNAL_STATS
   tx->aborts_invalid_memory++;
-#endif /* INTERNAL_STATS */
+# endif /* INTERNAL_STATS */
   /* Will cause a longjmp */
   stm_rollback(tx, STM_ABORT_SIGNAL);
 }
+#endif /* SIGNAL_HANDLER */
 
 /* ################################################################### *
  * STM FUNCTIONS
@@ -2143,9 +2180,9 @@ void stm_init()
 #if CM == CM_MODULAR
   char *s;
 #endif /* CM == CM_MODULAR */
-#ifndef EPOCH_GC
+#ifdef SIGNAL_HANDLER
   struct sigaction act;
-#endif /* ! EPOCH_GC */
+#endif /* SIGNAL_HANDLER */
 
   PRINT_DEBUG("==> stm_init()\n");
 
@@ -2184,7 +2221,7 @@ void stm_init()
   }
 #endif /* ! TLS */
 
-#ifndef EPOCH_GC
+#ifdef SIGNAL_HANDLER
   if (getenv(NO_SIGNAL_HANDLER) == NULL) {
     /* Catch signals for non-faulting load */
     act.sa_handler = signal_catcher;
@@ -2195,7 +2232,7 @@ void stm_init()
       exit(1);
     }
   }
-#endif /* ! EPOCH_GC */
+#endif /* SIGNAL_HANDLER */
   initialized = 1;
 }
 
@@ -2370,8 +2407,8 @@ sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr)
     return NULL;
 
   /* Attributes */
-  tx->attr = attr;
-  tx->ro = (attr == NULL ? 0 : attr->read_only);
+  tx->attr = (attr == NULL ? default_attributes : *attr);
+  tx->ro = tx->attr.read_only; /* TODO ro is a duplicate attribute */
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
@@ -2379,6 +2416,7 @@ sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr)
   /* Initialize transaction descriptor */
   stm_prepare(tx);
 
+  /* TODO: verify that mod_* deal with the new specification of stm_start (called only once per tx) */
   /* Callbacks */
   if (nb_start_cb != 0) {
     int cb;
@@ -2426,6 +2464,7 @@ int stm_commit(TXPARAM)
 
 #if CM == CM_MODULAR
   /* A read-only transaction with visible reads must simply drop locks */
+  /* FIXME: if killed? */
   if (tx->w_set.has_writes == 0) {
     w = tx->w_set.entries;
     for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
@@ -2519,6 +2558,9 @@ int stm_commit(TXPARAM)
   /* Drop locks and set new timestamp (traverse in reverse order) */
   w = tx->w_set.entries + tx->w_set.nb_entries - 1;
   for (i = tx->w_set.nb_entries; i > 0; i--, w--) {
+    /* TODO stm_release */
+    //if (w->addr == NULL)
+      //continue;
     if (w->no_drop)
       continue;
     /* No need for CAS (can only be modified by owner transaction) */
@@ -2530,6 +2572,9 @@ int stm_commit(TXPARAM)
   /* Install new versions, drop locks and set new timestamp */
   w = tx->w_set.entries;
   for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
+    /* TODO stm_release */
+    //if (w->addr == NULL)
+      //continue;
     if (w->mask != 0)
       ATOMIC_STORE(w->addr, w->value);
     /* Only drop lock for last covered address in write set */
@@ -2540,6 +2585,9 @@ int stm_commit(TXPARAM)
   /* Install new versions, drop locks and set new timestamp */
   w = tx->w_set.entries;
   for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
+    /* TODO stm_release */
+    //if (w->addr == NULL)
+      //continue;
     if (w->mask == ~(stm_word_t)0) {
       ATOMIC_STORE(w->addr, w->value);
     } else if (w->mask != 0) {
@@ -2565,6 +2613,11 @@ int stm_commit(TXPARAM)
 #if CM == CM_MODULAR
   tx->visible_reads = 0;
 #endif /* CM == CM_MODULAR */
+
+#ifdef HYBRID_ASF
+  /* Reset to Hybrid mode */
+  tx->software = 0;
+#endif /* HYBRID_ASF */
 
   /* Callbacks */
   if (nb_commit_cb != 0) {
@@ -2610,7 +2663,7 @@ stm_word_t stm_load(TXPARAMS volatile stm_word_t *addr)
   }
 #endif /* IRREVOCABLE_ENABLED */
 #if CM == CM_MODULAR
-  if (unlikely((tx->visible_reads >= vr_threshold && vr_threshold >= 0))) {
+  if (unlikely((tx->vr))) {
     /* Use visible read */
     return stm_read_visible(tx, addr);
   }
@@ -2705,7 +2758,7 @@ stm_tx_attr_t *stm_get_attributes(TXPARAM)
 {
   TX_GET;
 
-  return tx->attr;
+  return &tx->attr;
 }
 
 /*
@@ -2952,6 +3005,114 @@ int stm_register(void (*on_thread_init)(TXPARAMS void *arg),
   return 1;
 }
 
+#if 0
+void stm_release(TXPARAMS volatile stm_word_t *addr)
+{
+// TODO to test 
+  w_entry_t *w;
+  volatile stm_word_t *lock;
+#if DESIGN == WRITE_THROUGH
+  int must_release = 1;
+  stm_word_t t, i;
+#elif DESIGN == WRITE_BACK_ETL
+  stm_word_t l;
+#endif
+  TX_GET;
+
+#if CM == CM_MODULAR
+  if (GET_STATUS(tx->status) == TX_KILLED) {
+    stm_rollback(tx, STM_ABORT_KILLED);
+    return;
+  }
+#else /* CM != CM_MODULAR */
+  assert(GET_STATUS(tx->status) == TX_ACTIVE);
+#endif /* CM != CM_MODULAR */
+
+  /* Get reference to lock */
+  lock = GET_LOCK(addr);
+
+#if DESIGN == WRITE_THROUGH
+  w = tx->w_set.entries;
+  for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
+    /* If the lock covers this address */
+    if (GET_LOCK(w->addr) == lock) {
+      if (w->addr == addr) {
+        /* Restore value */
+        ATOMIC_STORE(w->addr, w->value);
+        w->addr = NULL;
+        if (w->no_drop)
+          return;
+	break;
+      } else if (w->no_drop == 1) {
+        w->no_drop = 0;
+        must_release = 0;
+	break;
+      }
+    }
+  }
+  if (must_release) {
+    /* Release lock */
+    /* Incarnation numbers allow readers to detect dirty reads */
+    i = LOCK_GET_INCARNATION(w->version) + 1;
+    if (i > INCARNATION_MAX) {
+      /* Simple approach: write new version (might trigger unnecessary aborts) */
+      if (t == 0) {
+        t = FETCH_INC_CLOCK + 1;
+        if (t >= VERSION_MAX) {
+# ifdef ROLLOVER_CLOCK
+          /* We can still use VERSION_MAX for protecting read-only trasanctions from dirty reads */
+          t = VERSION_MAX;
+# else /* ! ROLLOVER_CLOCK */
+          fprintf(stderr, "Exceeded maximum version number: 0x%lx\n", (unsigned long)t);
+          exit(1);
+# endif /* ! ROLLOVER_CLOCK */
+        }
+      }
+      ATOMIC_STORE_REL(w->lock, LOCK_SET_TIMESTAMP(t));
+    } else {
+      /* Use new incarnation number */
+      ATOMIC_STORE_REL(w->lock, LOCK_UPD_INCARNATION(w->version, i));
+    }
+  }
+#elif DESIGN == WRITE_BACK_ETL
+  /* Read the lock */
+  l = ATOMIC_LOAD_ACQ(lock);
+  w = (w_entry_t *)LOCK_GET_ADDR(l);
+  /* Reset the write set entry */
+  if (tx->w_set.entries <= w && w < tx->w_set.entries + tx->w_set.nb_entries) {
+    if (w->addr == addr) {
+      if (w->next == NULL) {
+        /* Release lock */
+#if CM == CM_MODULAR
+        ATOMIC_CAS_FULL(w->lock, l, LOCK_SET_TIMESTAMP(w->version));
+#else
+        ATOMIC_STORE(w->lock, LOCK_SET_TIMESTAMP(w->version));
+#endif
+      } else {
+        /* Update lock */
+#if CM == CM_MODULAR
+        ATOMIC_CAS_FULL(w->lock, l, LOCK_SET_ADDR_WRITE((stm_word_t)w->next));
+#else
+        ATOMIC_STORE(w->lock, LOCK_SET_ADDR_WRITE((stm_word_t)w->next));
+#endif
+      }
+      w->addr = NULL;
+    } else {
+      /* Lock was acquired first by another address */
+      w->addr = NULL;
+    }
+  }
+#else /* DESIGN == WRITE_BACK_CTL */
+  /* Reset the write set entry */
+  w = stm_has_written(tx, addr);
+  if (w != NULL) {
+    w->addr = NULL;
+  }
+#endif /* DESIGN == WRITE_BACK_CTL */
+
+}
+#endif
+
 /*
  * Called by the CURRENT thread to load a word-sized value in a unit transaction.
  */
@@ -3126,10 +3287,206 @@ int stm_set_irrevocable(TXPARAMS int serial)
   return 1;
 }
 #else /* ! IRREVOCABLE_ENABLED */
-int stm_set_irrevocable(TXPARAMs int serial)
+int stm_set_irrevocable(TXPARAMS int serial)
 {
   fprintf(stderr, "Irrevocability is not supported in this configuration\n");
   exit(-1);
   return 1;
 }
 #endif /* ! IRREVOCABLE_ENABLED */
+
+
+#ifdef HYBRID_ASF
+/* FIXME: ptlsim seems to not process pause */
+#define NOP __asm__ __volatile__("pause");
+//#define NOP __asm__ __volatile__("xor %0, %0\n": : "a"(0));
+#define NOP10 NOP NOP NOP NOP NOP NOP NOP NOP NOP NOP
+#define NOP100 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10 NOP10
+void hytm_restart()
+{
+  stm_tx_t *tx = stm_get_tx();
+  int i;
+  /* Backoff sleep TODO add randomness */
+  for(i = 0; i < tx->retries; i++)
+    NOP100;
+
+  /* Restore context before restarting */
+  /* FIXME return value to indicate which path to use */
+#if defined(TM_DTMC)
+  siglongjmp(tx->env, 0x01); /* ABI 0x01 = runInstrumented, DTMC explicitly needs 1 */
+#else /* ! defined(TM_DTMC) */
+  siglongjmp(tx->env, 0x09); /* ABI 0x09 = runInstrumented + restoreLiveVariable */
+#endif /* ! defined(TM_DTMC) */
+}
+
+stm_word_t hytm_load(TXPARAMS volatile stm_word_t *addr)
+{
+  volatile stm_word_t *lock;
+  /* TODO Check volatile */
+  stm_word_t l;
+  lock = GET_LOCK(addr);
+  /* Load descriptor using ASF */
+  l = asf_lock_load64((long unsigned int *)lock);
+  if (unlikely(LOCK_GET_WRITE(l))) {
+    /* a software transaction is currently using this descriptor */
+    asf_abort(ASF_STATUS_ABORT);
+    /* unreachable */
+    return 0;
+  }
+  /* TODO until now PTLSIM/ASF, doesn't follow the ASF specification and an
+   * unprotected load can happen before a protected load (the lock desc).
+   * Otherwise, when fixed, this protected load can be transform into regular
+   * load.
+   */
+  /* addr can return inconsistent value but will be abort after few cycles */
+//  return *addr;
+  /* Load value using ASF */
+  return asf_lock_load64((long unsigned int *)addr);
+}
+
+void hytm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
+{
+  TX_GET;
+  volatile stm_word_t *lock;
+  stm_word_t l;
+/* FIXME HYTM only works with CM SUICIDE and locks must covers only 8 bytes (no extra shift) */
+  lock = GET_LOCK(addr);
+  /* Load descriptor using ASF */
+  l = asf_lock_load64((long unsigned int *)lock);
+  if (unlikely(LOCK_GET_WRITE(l))) {
+    /* a software transaction is currently using this descriptor, ASF tx has to give up */
+    asf_abort(ASF_STATUS_ABORT);
+    /* mark as unreachable */
+    return;
+  }
+  /* Write the value using ASF */
+  asf_lock_store64((long unsigned int *)addr, value);
+  /* Add to write set to update the locks when we acquire TS */
+  /* TODO Check for array overflow */
+  tx->w_set.entries[tx->w_set.nb_entries++].lock = lock;
+}
+
+void hytm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask)
+{
+  hytm_store(TXARGS addr, (asf_lock_load64((long unsigned int *)addr) & ~mask) | (value & mask));
+}
+
+int hytm_commit(TXPARAM) 
+{
+  stm_word_t t;
+  w_entry_t *w;
+  int i;
+  TX_GET;
+
+  t = FETCH_INC_CLOCK + 1;
+  
+  /* Set new timestamp in locks */
+  w = tx->w_set.entries;
+  for (i = tx->w_set.nb_entries; i > 0; i--, w++) {
+    /* TODO Maybe no duplicate entries can improve perf? */
+    asf_lock_store64((long unsigned int *)w->lock, LOCK_SET_TIMESTAMP(t));
+  }
+  /* Commit the hytm transaction */
+  asf_commit();
+
+  /* TODO statistics */
+  return 1;
+}
+
+void hytm_abort(TXPARAMS int reason)
+{
+  asf_abort(ASF_STATUS_ABORT);
+}
+
+sigjmp_buf *hytm_start(TXPARAMS stm_tx_attr_t *attr)
+{
+  TX_GET;
+  unsigned long err;
+
+  stm_check_quiesce(tx);
+
+  __asm__ __volatile__ (""ASF_SPECULATE :"=a" (err));
+  if (unlikely(asf_status_code(err) != 0)) {
+    __asm__ __volatile__("": : : "memory"); /* All registers are lost when ASF aborts, thus we force reloading from memory */
+    TX_GET; /* Get Tx descriptor */
+    /* Error management */
+    if (asf_abort_code(err) == ASF_STATUS_CONTENTION) {
+      tx->retries++;
+      if (tx->retries > ASF_ABORT_THRESHOLD) 
+        tx->software = 1;
+    } else {
+      tx->software = 1;
+    }
+    /* hytm_restart must do a backoff sleep since ASF has a requester-win strategy and then livelock could happen */
+    hytm_restart();
+  }
+  /* Reset write set */
+  tx->w_set.nb_entries = 0;
+  return &tx->env;
+}
+
+/* generic interface for HYTM and STM */
+
+sigjmp_buf *tm_start(TXPARAMS stm_tx_attr_t *attr)
+{
+  TX_GET;
+
+  if (!tx->software) {
+    return hytm_start(TXARGS attr);
+  } else {
+    return stm_start(TXARGS attr);
+  }
+}
+
+stm_word_t tm_load(TXPARAMS volatile stm_word_t *addr)
+{
+  TX_GET;
+  if (!tx->software) {
+    return hytm_load(TXARGS addr);
+  } else {
+    return stm_load(TXARGS addr);
+  }
+}
+
+void tm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value)
+{
+  TX_GET;
+  if (!tx->software) {
+    hytm_store(TXARGS addr, value);
+  } else {
+    stm_store(TXARGS addr, value);
+  }
+}
+
+void tm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask)
+{
+  TX_GET;
+  if (!tx->software) {
+    hytm_store2(TXARGS addr, value, mask);
+  } else {
+    stm_store2(TXARGS addr, value, mask);
+  }
+}
+
+int tm_commit(TXPARAM)
+{
+  TX_GET;
+  if (!tx->software) {
+    return hytm_commit(TXARG);
+  } else {
+    return stm_commit(TXARG);
+  }
+}
+
+void tm_abort(TXPARAMS int reason)
+{
+  TX_GET;
+  if (!tx->software) {
+    hytm_abort(TXARGS reason);
+  } else {
+    stm_abort(TXARGS reason);
+  }
+}
+
+#endif /* HYBRID_ASF */
+

@@ -101,6 +101,8 @@ typedef struct node {
 
 struct rbtree {
     node_t* root;
+    /* TODO Check if set TM_PURE or use directly the function */
+    TM_PURE
     long (*compare)(const void*, const void*);   /* returns {-1,0,1}, 0 -> equal */
 };
 

@@ -1,4 +1,16 @@
+2010-06-02  Patrick Marlier <patrick.marlier@unine.ch>
+	* Added Hybrid TM using AMD ASF.
+	* Added ABI compatability with Intel STM C Compiler, GCC with TM
+	support and DTMC.
+	* Removed outdated Tanger support (now DTMC in ABI).
+
+2010-04-29  Pascal Felber  <pascal.felber@unine.ch>
+	* Added mod_ab module (atomic block statistics).
+
 [1.0.0 release]
+
+2010-02-22  Pascal Felber  <pascal.felber@unine.ch>
+	* Various fixes and cosmetic changes.
 
 2010-01-15  Pascal Felber  <pascal.felber@unine.ch>
 	* Changed rollover code.
@@ -16,7 +28,7 @@
 
 2009-11-20  Pascal Felber  <pascal.felber@unine.ch>
 	* Changed signature of stm_start().
-	* Added irrevokability.
+	* Added irrevocability.
 	* Added ABI for intel compiler and tm-gcc.
 	* Fixed a bug in mod_log.
 

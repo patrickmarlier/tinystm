@@ -3,10 +3,11 @@
  *   bank.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   Bank stress test.
  *
- * Copyright (c) 2007-2009.
+ * Copyright (c) 2007-2010.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -29,9 +30,8 @@
 #include <sys/time.h>
 #include <time.h>
 
-#include <atomic_ops.h>
-
 #include "stm.h"
+#include "mod_ab.h"
 
 #ifdef DEBUG
 # define IO_FLUSH                       fflush(NULL)
@@ -58,6 +58,7 @@
 #define DEFAULT_WRITE_ALL               0
 #define DEFAULT_READ_THREADS            0
 #define DEFAULT_WRITE_THREADS           0
+#define DEFAULT_DISJOINT                0
 
 #define XSTR(s)                         STR(s)
 #define STR(s)                          #s
@@ -66,7 +67,7 @@
  * GLOBALS
  * ################################################################### */
 
-static volatile AO_t stop;
+static volatile atomic_t stop;
 
 /* ################################################################### *
  * BANK ACCOUNTS
@@ -195,12 +196,15 @@ typedef struct thread_data {
   int read_threads;
   int write_all;
   int write_threads;
+  int disjoint;
+  int nb_threads;
   char padding[64];
 } thread_data_t;
 
 void *test(void *data)
 {
   int src, dst, nb;
+  int rand_max, rand_min;
   thread_data_t *d = (thread_data_t *)data;
   unsigned short seed[3];
 
@@ -208,6 +212,19 @@ void *test(void *data)
   seed[0] = (unsigned short)rand_r(&d->seed);
   seed[1] = (unsigned short)rand_r(&d->seed);
   seed[2] = (unsigned short)rand_r(&d->seed);
+
+  /* Prepare for disjoint access */
+  if (d->disjoint) {
+    rand_max = d->bank->size / d->nb_threads;
+    rand_min = rand_max * d->id;
+    if (rand_max <= 2) {
+      fprintf(stderr, "can't have disjoint account accesses");
+      return NULL;
+    }
+  } else {
+    rand_max = d->bank->size;
+    rand_min = 0;
+  }
 
   /* Create transaction */
   stm_init_thread();
@@ -235,10 +252,10 @@ void *test(void *data)
         d->nb_write_all++;
       } else {
         /* Choose random accounts */
-        src = (int)(erand48(seed) * d->bank->size);
-        dst = (int)(erand48(seed) * d->bank->size);
+        src = (int)(erand48(seed) * rand_max) + rand_min;
+        dst = (int)(erand48(seed) * rand_max) + rand_min;
         if (dst == src)
-          dst = (src + 1) % d->bank->size;
+          dst = ((src + 1) % rand_max) + rand_min;
         transfer(&d->bank->accounts[src], &d->bank->accounts[dst], 1);
         d->nb_transfer++;
       }
@@ -285,6 +302,7 @@ int main(int argc, char **argv)
     {"seed",                      required_argument, NULL, 's'},
     {"write-all-rate",            required_argument, NULL, 'w'},
     {"write-threads",             required_argument, NULL, 'W'},
+    {"disjoint",                  no_argument,       NULL, 'j'},
     {NULL, 0, NULL, 0}
   };
 
@@ -296,6 +314,7 @@ int main(int argc, char **argv)
     aborts_validate_read, aborts_validate_write, aborts_validate_commit,
     aborts_invalid_memory, aborts_killed,
     locked_reads_ok, locked_reads_failed, max_retries;
+  stm_ab_stats_t ab_stats;
   thread_data_t *data;
   pthread_t *threads;
   pthread_attr_t attr;
@@ -310,12 +329,13 @@ int main(int argc, char **argv)
   int seed = DEFAULT_SEED;
   int write_all = DEFAULT_WRITE_ALL;
   int write_threads = DEFAULT_WRITE_THREADS;
+  int disjoint = DEFAULT_DISJOINT;
   char *cm = NULL;
   sigset_t block_set;
 
   while(1) {
     i = 0;
-    c = getopt_long(argc, argv, "ha:c:d:n:r:R:s:w:W:", long_options, &i);
+    c = getopt_long(argc, argv, "ha:c:d:n:r:R:s:w:W:j", long_options, &i);
 
     if(c == -1)
       break;
@@ -383,6 +403,9 @@ int main(int argc, char **argv)
      case 'W':
        write_threads = atoi(optarg);
        break;
+     case 'j':
+       disjoint = 1;
+       break;
      case '?':
        printf("Use -h or --help for help\n");
        exit(0);
@@ -442,6 +465,7 @@ int main(int argc, char **argv)
   /* Init STM */
   printf("Initializing STM\n");
   stm_init();
+  mod_ab_init(0, NULL);
 
   if (stm_get_parameter("compile_flags", &s))
     printf("STM flags      : %s\n", s);
@@ -462,6 +486,8 @@ int main(int argc, char **argv)
     data[i].read_threads = read_threads;
     data[i].write_all = write_all;
     data[i].write_threads = write_threads;
+    data[i].disjoint = disjoint;
+    data[i].nb_threads = nb_threads;
     data[i].nb_transfer = 0;
     data[i].nb_read_all = 0;
     data[i].nb_write_all = 0;
@@ -507,7 +533,7 @@ int main(int argc, char **argv)
     sigemptyset(&block_set);
     sigsuspend(&block_set);
   }
-  AO_store_full(&stop, 1);
+  ATOMIC_STORE(&stop, 1);
   gettimeofday(&end, NULL);
   printf("STOPPING...\n");
 
@@ -591,6 +617,15 @@ int main(int argc, char **argv)
   printf("#lr-ok        : %lu (%f / s)\n", locked_reads_ok, locked_reads_ok * 1000.0 / duration);
   printf("#lr-failed    : %lu (%f / s)\n", locked_reads_failed, locked_reads_failed * 1000.0 / duration);
   printf("Max retries   : %lu\n", max_retries);
+
+  for (i = 0; stm_get_ab_stats(i, &ab_stats) != 0; i++) {
+    printf("Atomic block  : %d\n", i);
+    printf("  #samples    : %lu\n", ab_stats.samples);
+    printf("  Mean        : %f\n", ab_stats.mean);
+    printf("  Variance    : %f\n", ab_stats.variance);
+    printf("  Min         : %f\n", ab_stats.min); 
+    printf("  Max         : %f\n", ab_stats.max);
+  }
 
   /* Delete bank and accounts */
   free(bank->accounts);
