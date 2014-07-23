@@ -7,7 +7,7 @@
  * Description:
  *   Tanger adapter for tinySTM.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -43,8 +43,13 @@
 # define TANGER_LOADSTORE_ATTR __attribute__((nothrow,noinline))
 #endif /* TANGER_LOADSTORE_ATTR */
 
-#define TM_LOAD    stm_load
-#define TM_STORE   stm_store
+#ifdef HYBRID_ASF
+# define TM_LOAD    tm_load
+# define TM_STORE   tm_store
+#else /* !HYBRID_ASF */
+# define TM_LOAD    stm_load
+# define TM_STORE   stm_store
+#endif /* !HYBRID_ASF */
 
 /* TODO manage properly TLS but llvm-gcc should do */
 __thread appstack_t appstack;

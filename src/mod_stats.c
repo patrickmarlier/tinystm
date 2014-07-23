@@ -7,7 +7,7 @@
  * Description:
  *   Module for gathering global statistics about transactions.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,6 +32,7 @@
 
 #include "atomic.h"
 #include "stm.h"
+#include "utils.h"
 
 /* ################################################################### *
  * TYPES
@@ -127,10 +128,7 @@ static void mod_stats_on_thread_init(void *arg)
 {
   mod_stats_data_t *stats;
 
-  if ((stats = (mod_stats_data_t *)malloc(sizeof(mod_stats_data_t))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
+  stats = (mod_stats_data_t *)xmalloc(sizeof(mod_stats_data_t));
   stats->commits = 0;
   stats->retries = 0;
   stats->retries_acc = 0;
@@ -168,7 +166,7 @@ retry_min:
       goto retry_min;
   }
 
-  free(stats);
+  xfree(stats);
 }
 
 /*
@@ -211,7 +209,10 @@ void mod_stats_init(void)
   if (mod_stats_initialized)
     return;
 
-  stm_register(mod_stats_on_thread_init, mod_stats_on_thread_exit, NULL, NULL, mod_stats_on_commit, mod_stats_on_abort, NULL);
+  if (!stm_register(mod_stats_on_thread_init, mod_stats_on_thread_exit, NULL, NULL, mod_stats_on_commit, mod_stats_on_abort, NULL)) {
+    fprintf(stderr, "Cannot register callbacks\n");
+    exit(1);
+  }
   mod_stats_key = stm_create_specific();
   if (mod_stats_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");

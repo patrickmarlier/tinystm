@@ -7,7 +7,7 @@
  * Description:
  *   STM wrapper functions for different data types.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,9 +31,15 @@
 
 #define ALLOW_MISALIGNED_ACCESSES
 
-#define TM_LOAD(addr)                int_stm_load(tx, addr)
-#define TM_STORE(addr, val)          int_stm_store(tx, addr, val)
-#define TM_STORE2(addr, val, mask)   int_stm_store2(tx, addr, val, mask)
+#ifdef HYBRID_ASF
+# define TM_LOAD(addr)                tm_load(addr)
+# define TM_STORE(addr, val)          tm_store(addr, val)
+# define TM_STORE2(addr, val, mask)   tm_store2(addr, val, mask)
+#else /* ! HYBRID_ASF */
+# define TM_LOAD(addr)                int_stm_load(tx, addr)
+# define TM_STORE(addr, val)          int_stm_store(tx, addr, val)
+# define TM_STORE2(addr, val, mask)   int_stm_store2(tx, addr, val, mask)
+#endif /* ! HYBRID_ASF */
 
 typedef union convert_64 {
   uint64_t u64;

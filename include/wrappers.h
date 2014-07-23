@@ -7,7 +7,7 @@
  * Description:
  *   STM wrapper functions for different data types.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -32,7 +32,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2012
+ *   2007-2014
  */
 
 #ifndef _WRAPPERS_H_

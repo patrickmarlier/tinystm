@@ -43,6 +43,13 @@ DEFINES += -UPTHREAD_WRAPPER
 # Define how TLS is used in ABI (should be removed for next release)
 DEFINES += -DTLS_COMPILER
 
+# Enable HYBRID
+ifdef HYBRID_ASF
+  DEFINES += -DHYBRID_ASF -DASF_STACK -fomit-frame-pointer
+else
+  DEFINES += -UHYBRID_ASF
+endif
+
 ##############################################################################
 # Do not modify anything below this point!
 ##############################################################################
@@ -87,6 +94,31 @@ test: 	all $(BINS)
 
 intset-clean:
 	rm -f $(BINS)
+
+# Rules for intset ASF specific benchmarks
+BINSASF = intset-hs-asf intset-ll-asf intset-rb-asf intset-sl-asf
+
+intset-hs-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_HASHSET -c -o $@ $<
+
+intset-ll-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_LINKEDLIST -c -o $@ $<
+
+intset-rb-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_RBTREE -c -o $@ $<
+
+intset-sl-asf.o:	$(ROOT)/test-asf/intset/intset.c
+	$(TESTCC) $(TESTCFLAGS) -DUSE_SKIPLIST -c -o $@ $<
+
+# FIXME in case of ABI $(TMLIB) must be replaced to abi/...
+$(BINSASF):	%:	%.o all
+	$(TESTLD) -o $@ $< $(TESTLDFLAGS) -lpthread
+
+# TODO to be tested!
+testasf: all $(BINSASF)
+
+intsetasf-clean:
+	rm -f $(BINSASF)
 
 check: 	test intset-check
 

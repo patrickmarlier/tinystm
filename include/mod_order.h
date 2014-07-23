@@ -1,11 +1,11 @@
 /*
  * File:
- *   mod_print.h
+ *   mod_order.h
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
- *   Module to test callbacks.
+ *   Module to force transactions to commit in order.
  *
  * Copyright (c) 2007-2014.
  *
@@ -25,8 +25,8 @@
 
 /**
  * @file
- *   Module to test callbacks.  This module simply prints a message at
- *   each invocation of a callback.
+ *   Module to force transactions to commit in order. The first transaction that
+ *   starts will be the first one to commit. This module requires CM_MODULAR.
  * @author
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
@@ -46,7 +46,7 @@ extern "C" {
  * main thread, after initializing the STM library and before
  * performing any transactional operation.
  */
-void mod_print_init(void);
+void mod_order_init(void);
 
 # ifdef __cplusplus
 }

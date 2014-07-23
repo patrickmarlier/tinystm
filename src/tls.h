@@ -7,7 +7,7 @@
  * Description:
  *   STM functions.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -86,7 +86,7 @@ static INLINE struct stm_tx *
 tls_get_tx(void)
 {
   struct stm_tx *r;
-  asm (SEG_READ(10) : "=r"(r));
+  asm volatile (SEG_READ(10) : "=r"(r));
   return r;
 }
 
@@ -94,7 +94,7 @@ static INLINE long
 tls_get_gc(void)
 {
   long r;
-  asm (SEG_READ(11) : "=r"(r));
+  asm volatile (SEG_READ(11) : "=r"(r));
   return r;
 }
 

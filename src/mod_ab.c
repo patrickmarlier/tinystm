@@ -7,7 +7,7 @@
  * Description:
  *   Module for gathering statistics about atomic blocks.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -36,6 +36,7 @@
 
 #include "atomic.h"
 #include "stm.h"
+#include "utils.h"
 
 /* ################################################################### *
  * TYPES
@@ -68,8 +69,8 @@ typedef struct samples_buffer {         /* Buffer to hold samples */
     int id;                             /* Atomic block identifier */
     unsigned long length;               /* Transaction length */
   } buffer[BUFFER_SIZE];                /* Buffer */
-  int nb;                               /* Number of samples */
-  unsigned long total;                  /* Total number of valid samples seen by thread so far */
+  unsigned int nb;                      /* Number of samples */
+  unsigned int total;                   /* Total number of valid samples seen by thread so far */
   uint64_t start;                       /* Start time of the current transaction */
   unsigned short seed[3];               /* Thread-local PNRG's seed */
 } samples_buffer_t;
@@ -116,10 +117,7 @@ static void sc_init(smart_counter_t *c)
   c->samples = 0;
   c->mean = c->variance = c->min = c->max = 0;
   c->sorted = 1;
-  if ((c->reservoir = (double *)malloc(reservoir_size * sizeof(double))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
+  c->reservoir = (double *)xmalloc(reservoir_size * sizeof(double));
 }
 
 /*
@@ -259,10 +257,7 @@ static void sc_add_samples(samples_buffer_t *samples)
       ab = ab->next;
     if (ab == NULL) {
       /* No entry yet: create one */
-      if ((ab = (ab_stats_t *)malloc(sizeof(ab_stats_t))) == NULL) {
-        perror("malloc");
-        exit(1);
-      }
+      ab = (ab_stats_t *)xmalloc(sizeof(ab_stats_t));
       ab->id = id;
       ab->next = ab_list[bucket];
       sc_init(&ab->stats);
@@ -279,6 +274,21 @@ static void sc_add_samples(samples_buffer_t *samples)
  */
 static void cleanup(void)
 {
+  int i;
+  ab_stats_t *ab, *n;
+
+  pthread_mutex_lock(&ab_mutex);
+  for (i = 0; i < NB_ATOMIC_BLOCKS; i++) {
+    ab = ab_list[i];
+    while (ab != NULL) {
+      n = ab->next;
+      xfree(ab->stats.reservoir);
+      xfree(ab);
+      ab = n;
+    }
+  }
+  pthread_mutex_unlock(&ab_mutex);
+
   pthread_mutex_destroy(&ab_mutex);
 }
 
@@ -289,11 +299,9 @@ static void mod_ab_on_thread_init(void *arg)
 {
   samples_buffer_t *samples;
 
-  if ((samples = (samples_buffer_t *)malloc(sizeof(samples_buffer_t))) == NULL) {
-    perror("malloc");
-    exit(1);
-  }
+  samples = (samples_buffer_t *)xmalloc(sizeof(samples_buffer_t));
   samples->nb = 0;
+  samples->total = 0;
   /* Initialize thread-local seed in mutual exclution */
   pthread_mutex_lock(&ab_mutex);
   samples->seed[0] = (unsigned short)rand_r(&seed);
@@ -315,7 +323,7 @@ static void mod_ab_on_thread_exit(void *arg)
 
   sc_add_samples(samples);
 
-  free(samples);
+  xfree(samples);
 }
 
 /*
@@ -430,7 +438,10 @@ void mod_ab_init(int freq, int (*check)(void))
     reservoir_size = RESERVOIR_SIZE_DEFAULT;
   check_fn = check;
 
-  stm_register(mod_ab_on_thread_init, mod_ab_on_thread_exit, mod_ab_on_start, NULL, mod_ab_on_commit, mod_ab_on_abort, NULL);
+  if (!stm_register(mod_ab_on_thread_init, mod_ab_on_thread_exit, mod_ab_on_start, NULL, mod_ab_on_commit, mod_ab_on_abort, NULL)) {
+    fprintf(stderr, "Cannot register callbacks\n");
+    exit(1);
+  }
   mod_ab_key = stm_create_specific();
   if (mod_ab_key < 0) {
     fprintf(stderr, "Cannot create specific key\n");

@@ -7,7 +7,7 @@
  * Description:
  *   STM functions.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -31,7 +31,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2012
+ *   2007-2014
  */
 
 /**
@@ -83,11 +83,11 @@
 /**
  * Version string
  */
-# define STM_VERSION                    "1.0.4"
+# define STM_VERSION                    "1.0.5"
 /**
  * Version number (times 100)
  */
-# define STM_VERSION_NB                 104
+# define STM_VERSION_NB                 105
 
 /**
  * Calling convention
@@ -435,6 +435,17 @@ int stm_irrevocable_tx(struct stm_tx *tx) _CALLCONV;
 
 //@{
 /**
+ * Check if the current transaction has been killed.
+ *
+ * @return
+ *   True (non-zero) if the transaction has been killed, false (zero) otherwise.
+ */
+int stm_killed(void) _CALLCONV;
+int stm_killed_tx(struct stm_tx *tx) _CALLCONV;
+//@}
+
+//@{
+/**
  * Get the environment used by the current thread to jump back upon
  * abort.  This environment should be used when calling sigsetjmp()
  * before starting the transaction and passed as parameter to
@@ -517,6 +528,7 @@ int stm_set_parameter(const char *name, void *val) _CALLCONV;
  */
 int stm_create_specific(void) _CALLCONV;
 
+//@{
 /**
  * Get application-specific data associated to the current
  * thread/transaction and a given key.
@@ -527,7 +539,10 @@ int stm_create_specific(void) _CALLCONV;
  *   Data stored under the given key.
  */
 void *stm_get_specific(int key) _CALLCONV;
+void *stm_get_specific_tx(struct stm_tx *tx, int key) _CALLCONV;
+//@}
 
+//@{
 /**
  * Set application-specific data associated to the current
  * thread/transaction and a given key.
@@ -538,6 +553,8 @@ void *stm_get_specific(int key) _CALLCONV;
  *   Data to store under the given key.
  */
 void stm_set_specific(int key, void *data) _CALLCONV;
+void stm_set_specific_tx(struct stm_tx *tx, int key, void *data) _CALLCONV;
+//@}
 
 /**
  * Register application-specific callbacks that are triggered each time
@@ -679,6 +696,170 @@ stm_word_t stm_get_clock(void) _CALLCONV;
 int stm_set_irrevocable(int serial) _CALLCONV;
 int stm_set_irrevocable_tx(struct stm_tx *tx, int serial) _CALLCONV;
 //@}
+
+#ifdef HYBRID_ASF
+
+/* FIXME */
+# error Hybrid is temporary disabled for code refactoring
+
+# ifdef EXPLICIT_TX_PARAMETER
+#  define TXTYPE                        struct stm_tx *
+#  define TXPARAM                       struct stm_tx *tx
+#  define TXPARAMS                      struct stm_tx *tx,
+#  define TXARG                         (struct stm_tx *)tx
+#  define TXARGS                        (struct stm_tx *)tx,
+# else /* ! EXPLICIT_TX_PARAMETER */
+#  define TXTYPE                        void
+#  define TXPARAM                       /* Nothing */
+#  define TXPARAMS                      /* Nothing */
+#  define TXARG                         /* Nothing */
+#  define TXARGS                        /* Nothing */
+#endif /* ! EXPLICIT_TX_PARAMETER */
+
+/**
+ * Start an hybrid transaction.
+ *
+ * @param attr
+ *   Specifies optional attributes associated to the transaction.
+ *   Attributes are copied in transaction-local storage.  If null, the
+ *   transaction uses default attributes.
+ * @return
+ *   Environment (stack context) to be used to jump back upon abort.  It
+ *   is the responsibility of the application to call sigsetjmp()
+ *   immediately after starting the transaction.  If the transaction is
+ *   nested, the function returns NULL and one should not call
+ *   sigsetjmp() as an abort will restart the top-level transaction
+ *   (flat nesting).
+ */
+sigjmp_buf *hytm_start(TXPARAMS stm_tx_attr_t attr);
+
+/**
+ * Try to commit an hybrid transaction.
+ *
+ * @return
+ *   1 upon success, 0 otherwise.
+ */
+int hytm_commit(TXPARAM);
+
+/**
+ * Explicitly abort an hybrid transaction.
+ *
+ * @param abort_reason
+ *   Reason for aborting the transaction.
+ */
+void hytm_abort(TXPARAMS int abort_reason);
+
+/**
+ * Transactional hybrid load.
+ *
+ * @param addr
+ *   Address of the memory location.
+ * @return
+ *   Value read from the specified address.
+ */
+stm_word_t hytm_load(TXPARAMS volatile stm_word_t *addr);
+
+/**
+ * Transactional hybrid store.
+ *
+ * @param addr
+ *   Address of the memory location.
+ * @param value
+ *   Value to be written.
+ */
+void hytm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
+
+/**
+ * Transactional hybrid store.
+ *
+ * @param addr
+ *   Address of the memory location.
+ * @param value
+ *   Value to be written.
+ * @param mask
+ *   Mask specifying the bits to be written.
+ */
+void hytm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
+
+/**
+ * Start a transaction.
+ *
+ * @param attr
+ *   Specifies optional attributes associated to the transaction.
+ *   Attributes are copied in transaction-local storage.  If null, the
+ *   transaction uses default attributes.
+ * @return
+ *   Environment (stack context) to be used to jump back upon abort.  It
+ *   is the responsibility of the application to call sigsetjmp()
+ *   immediately after starting the transaction.  If the transaction is
+ *   nested, the function returns NULL and one should not call
+ *   sigsetjmp() as an abort will restart the top-level transaction
+ *   (flat nesting).
+ */
+sigjmp_buf *tm_start(TXPARAMS stm_tx_attr_t attr);
+
+/**
+ * Try to commit a transaction.
+ *
+ * @return
+ *   1 upon success, 0 otherwise.
+ */
+int tm_commit(TXPARAM);
+
+/**
+ * Explicitly abort a transaction.
+ *
+ * @param abort_reason
+ *   Reason for aborting the transaction.
+ */
+void tm_abort(TXPARAMS int abort_reason);
+
+/**
+ * Transactional load.
+ *
+ * @param addr
+ *   Address of the memory location.
+ * @return
+ *   Value read from the specified address.
+ */
+stm_word_t tm_load(TXPARAMS volatile stm_word_t *addr);
+
+/**
+ * Transactional store.
+ *
+ * @param addr
+ *   Address of the memory location.
+ * @param value
+ *   Value to be written.
+ */
+void tm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
+
+/**
+ * Transactional store.
+ *
+ * @param addr
+ *   Address of the memory location.
+ * @param value
+ *   Value to be written.
+ * @param mask
+ *   Mask specifying the bits to be written.
+ */
+void tm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
+
+/**
+ * Check if the current transaction is an hybrid transaction.
+ *
+ * @return
+ *   True (non-zero) if the transaction is hybrid, false (zero) otherwise.
+ */
+int tm_hybrid(TXPARAM);
+
+/**
+ * Abort the current hybrid transaction and retry it using software mode.
+ * No effect is the transaction is already in software mode.
+ */
+void tm_restart_software(TXPARAM);
+#endif /* HYBRID_ASF */
 
 #ifdef __cplusplus
 }

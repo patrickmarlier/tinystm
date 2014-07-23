@@ -7,7 +7,7 @@
  * Description:
  *   STM internal functions for Write-back ETL.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,7 +34,6 @@
 static NOINLINE void stm_drop(stm_tx_t *tx);
 static NOINLINE int stm_kill(stm_tx_t *tx, stm_tx_t *other, stm_word_t status);
 #endif /* CM == CM_MODULAR */
-
 
 static INLINE int
 stm_wbetl_validate(stm_tx_t *tx)
@@ -363,7 +362,7 @@ stm_wbetl_read_invisible(stm_tx_t *tx, volatile stm_word_t *addr)
       /* Verify that version has not been overwritten (read value has not
        * yet been added to read set and may have not been checked during
        * extend) */
-      l = ATOMIC_LOAD_ACQ(lock);
+      l2 = ATOMIC_LOAD_ACQ(lock);
       if (l != l2) {
         l = l2;
         goto restart_no_load;

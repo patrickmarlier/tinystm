@@ -7,7 +7,7 @@
  * Description:
  *   STM internal functions.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,8 +28,8 @@
 
 #include <pthread.h>
 #include <string.h>
-#include "tls.h"
 #include <stm.h>
+#include "tls.h"
 #include "utils.h"
 #include "atomic.h"
 #include "gc.h"
@@ -77,6 +77,10 @@
 #if defined(EPOCH_GC) && defined(SIGNAL_HANDLER)
 # error "SIGNAL_HANDLER can only be used without EPOCH_GC"
 #endif /* defined(EPOCH_GC) && defined(SIGNAL_HANDLER) */
+
+#if defined(HYBRID_ASF) && CM != CM_SUICIDE
+# error "HYBRID_ASF can only be used with SUICIDE contention manager"
+#endif /* defined(HYBRID_ASF) && CM != CM_SUICIDE */
 
 #define TX_GET                          stm_tx_t *tx = tls_get_tx()
 
@@ -323,6 +327,9 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #ifdef IRREVOCABLE_ENABLED
   unsigned int irrevocable:4;           /* Is this execution irrevocable? */
 #endif /* IRREVOCABLE_ENABLED */
+#ifdef HYBRID_ASF
+  unsigned int software:1;              /* Is the transaction mode pure software? */
+#endif /* HYBRID_ASF */
   unsigned int nesting;                 /* Nesting level */
 #if CM == CM_MODULAR
   stm_word_t timestamp;                 /* Timestamp (not changed upon restart) */
@@ -342,9 +349,9 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #if CM == CM_MODULAR
   int visible_reads;                    /* Should we use visible reads? */
 #endif /* CM == CM_MODULAR */
-#if CM == CM_MODULAR || defined(TM_STATISTICS)
+#if CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF)
   unsigned int stat_retries;            /* Number of consecutive aborts (retries) */
-#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
+#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF) */
 #ifdef TM_STATISTICS
   unsigned int stat_commits;            /* Total number of commits (cumulative) */
   unsigned int stat_aborts;             /* Total number of aborts (cumulative) */
@@ -567,6 +574,7 @@ stm_quiesce(stm_tx_t *tx, int block)
 
   PRINT_DEBUG("==> stm_quiesce(%p,%d)\n", tx, block);
 
+  /* TODO ASF doesn't support pthread_mutex_* since it may require syscall. */
   if (IS_ACTIVE(tx->status)) {
     /* Only one active transaction can quiesce at a time, others must abort */
     if (pthread_mutex_trylock(&_tinystm.quiesce_mutex) != 0)
@@ -735,16 +743,10 @@ stm_allocate_rs_entries(stm_tx_t *tx, int extend)
   if (extend) {
     /* Extend read set */
     tx->r_set.size *= 2;
-    if ((tx->r_set.entries = (r_entry_t *)realloc(tx->r_set.entries, tx->r_set.size * sizeof(r_entry_t))) == NULL) {
-      perror("realloc read set");
-      exit(1);
-    }
+    tx->r_set.entries = (r_entry_t *)xrealloc(tx->r_set.entries, tx->r_set.size * sizeof(r_entry_t));
   } else {
     /* Allocate read set */
-    if ((tx->r_set.entries = (r_entry_t *)xmalloc(tx->r_set.size * sizeof(r_entry_t))) == NULL) {
-      perror("malloc read set");
-      exit(1);
-    }
+    tx->r_set.entries = (r_entry_t *)xmalloc_aligned(tx->r_set.size * sizeof(r_entry_t));
   }
 }
 
@@ -757,6 +759,9 @@ stm_allocate_ws_entries(stm_tx_t *tx, int extend)
 #if CM == CM_MODULAR || defined(CONFLICT_TRACKING)
   int i, first = (extend ? tx->w_set.size : 0);
 #endif /* CM == CM_MODULAR || defined(CONFLICT_TRACKING) */
+#ifdef EPOCH_GC
+  void *a;
+#endif /* ! EPOCH_GC */
 
   PRINT_DEBUG("==> stm_allocate_ws_entries(%p[%lu-%lu],%d)\n", tx, (unsigned long)tx->start, (unsigned long)tx->end, extend);
 
@@ -764,16 +769,17 @@ stm_allocate_ws_entries(stm_tx_t *tx, int extend)
     /* Extend write set */
     /* Transaction must be inactive for WRITE_THROUGH or WRITE_BACK_ETL */
     tx->w_set.size *= 2;
-    if (unlikely((tx->w_set.entries = (w_entry_t *)realloc(tx->w_set.entries, tx->w_set.size * sizeof(w_entry_t))) == NULL)) {
-      perror("realloc write set");
-      exit(1);
-    }
+#ifdef EPOCH_GC
+    a = tx->w_set.entries;
+    tx->w_set.entries = (w_entry_t *)xmalloc_aligned(tx->w_set.size * sizeof(w_entry_t));
+    memcpy(tx->w_set.entries, a, tx->w_set.size / 2 * sizeof(w_entry_t));
+    gc_free(a, GET_CLOCK);
+#else /* ! EPOCH_GC */
+    tx->w_set.entries = (w_entry_t *)xrealloc(tx->w_set.entries, tx->w_set.size * sizeof(w_entry_t));
+#endif /* ! EPOCH_GC */
   } else {
     /* Allocate write set */
-    if (unlikely((tx->w_set.entries = (w_entry_t *)xmalloc(tx->w_set.size * sizeof(w_entry_t))) == NULL)) {
-      perror("malloc write set");
-      exit(1);
-    }
+    tx->w_set.entries = (w_entry_t *)xmalloc_aligned(tx->w_set.size * sizeof(w_entry_t));
   }
   /* Ensure that memory is aligned. */
   assert((((stm_word_t)tx->w_set.entries) & OWNED_MASK) == 0);
@@ -872,7 +878,7 @@ stm_drop(stm_tx_t *tx)
      * transaction could reuse the same entry after having been killed
      * and restarted, and another slow transaction could steal the lock
      * using CAS without noticing the restart) */
-    gc_free(tx->w_set.entries, tx->start);
+    gc_free(tx->w_set.entries, GET_CLOCK);
     stm_allocate_ws_entries(tx, 0);
   }
 }
@@ -1196,10 +1202,7 @@ int_stm_init_thread(void)
 #endif /* EPOCH_GC */
 
   /* Allocate descriptor */
-  if ((tx = (stm_tx_t *)xmalloc(sizeof(stm_tx_t))) == NULL) {
-    perror("malloc tx");
-    exit(1);
-  }
+  tx = (stm_tx_t *)xmalloc_aligned(sizeof(stm_tx_t));
   /* Set attribute */
   tx->attr = (stm_tx_attr_t)0;
   /* Set status (no need for CAS or atomic op) */
@@ -1239,9 +1242,9 @@ int_stm_init_thread(void)
   tx->visible_reads = 0;
   tx->timestamp = 0;
 #endif /* CM == CM_MODULAR */
-#if CM == CM_MODULAR || defined(TM_STATISTICS)
+#if CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF)
   tx->stat_retries = 0;
-#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
+#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF) */
 #ifdef TM_STATISTICS
   /* Statistics */
   tx->stat_commits = 0;
@@ -1257,6 +1260,9 @@ int_stm_init_thread(void)
   tx->stat_locked_reads_failed = 0;
 # endif /* READ_LOCKED_DATA */
 #endif /* TM_STATISTICS2 */
+#ifdef HYBRID_ASF
+  tx->software = 0;
+#endif /* HYBRID_ASF */
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
@@ -1419,6 +1425,11 @@ int_stm_commit(stm_tx_t *tx)
   tx->visible_reads = 0;
 #endif /* CM == CM_MODULAR */
 
+#ifdef HYBRID_ASF
+  /* Reset to Hybrid mode */
+  tx->software = 0;
+#endif /* HYBRID_ASF */
+
 #ifdef IRREVOCABLE_ENABLED
   if (unlikely(tx->irrevocable)) {
     ATOMIC_STORE(&_tinystm.irrevocable, 0);
@@ -1495,6 +1506,13 @@ int_stm_irrevocable(stm_tx_t *tx)
 #else /* ! IRREVOCABLE_ENABLED */
   return 0;
 #endif /* ! IRREVOCABLE_ENABLED */
+}
+
+static INLINE int
+int_stm_killed(stm_tx_t *tx)
+{
+  assert (tx != NULL);
+  return (GET_STATUS(tx->status) == TX_KILLED);
 }
 
 static INLINE sigjmp_buf *
@@ -1600,19 +1618,17 @@ int_stm_get_stats(stm_tx_t *tx, const char *name, void *val)
 }
 
 static INLINE void
-int_stm_set_specific(int key, void *data)
+int_stm_set_specific(stm_tx_t *tx, int key, void *data)
 {
-  TX_GET;
   assert (tx != NULL && key >= 0 && key < _tinystm.nb_specific);
-  tx->data[key] = data;
+  ATOMIC_STORE(&tx->data[key], data);
 }
 
 static INLINE void *
-int_stm_get_specific(int key)
+int_stm_get_specific(stm_tx_t *tx, int key)
 {
-  TX_GET;
   assert (tx != NULL && key >= 0 && key < _tinystm.nb_specific);
-  return tx->data[key];
+  return (void *)ATOMIC_LOAD(&tx->data[key]);
 }
 
 #endif /* _STM_INTERNAL_H_ */

@@ -1,5 +1,19 @@
+[1.0.5 release]
+
+2013-01-14  Pascal Felber  <pascal.felber@unine.ch>
+	* Fixed bugs in garbage collection.
+	* Added module that for to commit in order (mod_order)
+	* Added stm_get_specific_tx and stm_set_specific_tx for mod_order.
+
+[1.0.4 release]
+
 2012-10-23  Pascal Felber  <pascal.felber@unine.ch>
 	* Added MIT license (dual license).
+
+2012-03-27  Patrick Marlier <patrick.marlier@unine.ch>
+	* Split stm.c file for the different strategies (wb-etl/wb-ctl/wt).
+
+[1.0.3 release]
 
 2011-11-17  Patrick Marlier <patrick.marlier@unine.ch>
 	* Fixed stack saving and minor changes for DTMC (tanger).
@@ -9,6 +23,8 @@
 
 2011-02-15  Patrick Marlier <patrick.marlier@unine.ch>
 	* Fixed a bug in stm_rollback (reported by Rahul Gayatri).
+
+[1.0.2 release]
 
 2011-02-07  Patrick Marlier <patrick.marlier@unine.ch>
 	* Minor fixes.
@@ -25,8 +41,10 @@
 2010-07-08  Patrick Marlier <patrick.marlier@unine.ch>
 	* Fixed a bug in stm_commit with CTL (thanks to Srđan Stipić).
 
-2010-07-07 Pascal Felber  <pascal.felber@unine.ch>
+2010-07-07  Pascal Felber  <pascal.felber@unine.ch>
 	* Fixed a bug in stm_set_irrevoable when using abort handler.
+
+[1.0.1 release]
 
 2010-06-02  Patrick Marlier <patrick.marlier@unine.ch>
 	* Added Hybrid TM using AMD ASF.

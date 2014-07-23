@@ -7,7 +7,7 @@
  * Description:
  *   Integer set stress test.
  *
- * Copyright (c) 2007-2013.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License

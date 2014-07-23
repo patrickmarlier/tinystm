@@ -70,6 +70,6 @@ TESTLD          ?= $(TMLINK)
 TESTLDFLAGS     := $(TMLINKFLAGS) $(TESTLDFLAGS) 
 # TESTLDFLAGS     += -static 
 
-clean: 	intset-clean
+clean: 	intset-clean intsetasf-clean
 	rm -f *.bc *.o libtanger-stm.bc libtanger-stm.a libitm.a libtanger-stm.s
 

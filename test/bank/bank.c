@@ -7,7 +7,7 @@
  * Description:
  *   Bank stress test.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -105,25 +105,25 @@ static volatile int stop;
  * ################################################################### */
 
 typedef struct account {
-  int number;
-  int balance;
+  long number;
+  long balance;
 } account_t;
 
 typedef struct bank {
   account_t *accounts;
-  int size;
+  long size;
 } bank_t;
 
 static int transfer(account_t *src, account_t *dst, int amount)
 {
-  int i;
+  long i;
 
   /* Allow overdrafts */
   TM_START(0, RW);
-  i = (int)TM_LOAD(&src->balance);
+  i = TM_LOAD(&src->balance);
   i -= amount;
   TM_STORE(&src->balance, i);
-  i = (int)TM_LOAD(&dst->balance);
+  i = TM_LOAD(&dst->balance);
   i += amount;
   TM_STORE(&dst->balance, i);
   TM_COMMIT;
@@ -133,7 +133,7 @@ static int transfer(account_t *src, account_t *dst, int amount)
 
 static int total(bank_t *bank, int transactional)
 {
-  int i, total;
+  long i, total;
 
   if (!transactional) {
     total = 0;
@@ -144,7 +144,7 @@ static int total(bank_t *bank, int transactional)
     TM_START(1, RO);
     total = 0;
     for (i = 0; i < bank->size; i++) {
-      total += (int)TM_LOAD(&bank->accounts[i].balance);
+      total += TM_LOAD(&bank->accounts[i].balance);
     }
     TM_COMMIT;
   }
@@ -154,7 +154,7 @@ static int total(bank_t *bank, int transactional)
 
 static void reset(bank_t *bank)
 {
-  int i;
+  long i;
 
   TM_START(2, RW);
   for (i = 0; i < bank->size; i++) {

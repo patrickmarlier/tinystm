@@ -7,7 +7,7 @@
  * Description:
  *   Utilities functions.
  *
- * Copyright (c) 2007-2012.
+ * Copyright (c) 2007-2014.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,6 +26,7 @@
 #ifndef _UTILS_H_
 #define _UTILS_H_
 
+#include <stdio.h>
 #include <stdlib.h>
 
 #define COMPILE_TIME_ASSERT(pred)       switch (0) { case 0: case pred: ; }
@@ -79,10 +80,49 @@
 #endif /* ! (defined(__GNUC__) || defined(__INTEL_COMPILER)) */
 
 /*
- * malloc/free wrappers for TM metadata.
+ * malloc/free wrappers.
  */
 static INLINE void*
 xmalloc(size_t size)
+{
+  void *memptr = malloc(size);
+  if (unlikely(memptr == NULL)) {
+    perror("malloc");
+    exit(1);
+  }
+  return memptr;
+}
+
+static INLINE void*
+xcalloc(size_t count, size_t size)
+{
+  void *memptr = calloc(count, size);
+  if (unlikely(memptr == NULL)) {
+    perror("calloc");
+    exit(1);
+  }
+  return memptr;
+}
+
+static INLINE void*
+xrealloc(void *addr, size_t size)
+{
+  addr = realloc(addr, size);
+  if (unlikely(addr == NULL)) {
+    perror("realloc");
+    exit(1);
+  }
+  return addr;
+}
+
+static INLINE void
+xfree(void *mem)
+{
+  free(mem);
+}
+
+static INLINE void*
+xmalloc_aligned(size_t size)
 {
   void *memptr;
   /* TODO is posix_memalign is not available, provide malloc fallback. */
@@ -92,22 +132,14 @@ xmalloc(size_t size)
 #elif defined(__APPLE__)
   memptr = valloc(size);
 #else
-  if (posix_memalign(&memptr, CACHELINE_SIZE, size))
-    return NULL;
+  if (unlikely(posix_memalign(&memptr, CACHELINE_SIZE, size)))
+    memptr = NULL;
 #endif
+  if (unlikely(memptr == NULL)) {
+    fprintf(stderr, "Error allocating aligned memory\n");
+    exit(1);
+  }
   return memptr;
-}
-
-static INLINE void*
-xrealloc(void *addr, size_t size)
-{
-  return realloc(addr, size);
-}
-
-static INLINE void
-xfree(void *mem)
-{
-  free(mem);
 }
 
 #endif /* !_UTILS_H_ */
