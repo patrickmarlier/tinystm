@@ -7,7 +7,7 @@
  * Description:
  *   Integer set stress test.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2013.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -38,8 +41,8 @@
 # include "../../abi/gcc/tm_macros.h"
 #elif defined(TM_DTMC) 
 # include "../../abi/dtmc/tm_macros.h"
-/* TODO to be removed when DTMC will support annotations (should be ok now) */
-//static double tanger_wrapperpure_erand48(unsigned short int __xsubi[3]) __attribute__ ((weakref("erand48")));
+/* Make erand48 pure for DTMC (transaction_pure should work too). */
+static double tanger_wrapperpure_erand48(unsigned short int __xsubi[3]) __attribute__ ((weakref("erand48")));
 #elif defined(TM_INTEL)
 # include "../../abi/intel/tm_macros.h"
 #elif defined(TM_ABI)
@@ -64,10 +67,10 @@ void perror(const char *s);
  * transactions, one should check the environment returned by
  * stm_get_env() and only call sigsetjmp() if it is not null.
  */
-# define TM_START(id, ro)                   { stm_tx_attr_t _a = {id, ro}; \
-                                              sigjmp_buf *_e = stm_start(&_a); \
+# define TM_START(tid, ro)                  { stm_tx_attr_t _a = {{.id = tid, .read_only = ro}}; \
+                                              sigjmp_buf *_e = stm_start(_a); \
                                               if (_e != NULL) sigsetjmp(*_e, 0); 
-# define TM_START_TS(ts, label)             { sigjmp_buf *_e = stm_start(NULL); \
+# define TM_START_TS(ts, label)             { sigjmp_buf *_e = stm_start((stm_tx_attr_t)0); \
                                               if (_e != NULL && sigsetjmp(*_e, 0)) goto label; \
 	                                      stm_set_extension(0, &ts)
 # define TM_LOAD(addr)                      stm_load((stm_word_t *)addr)
@@ -113,10 +116,8 @@ void perror(const char *s);
 /* ################################################################### *
  * GLOBALS
  * ################################################################### */
-/* TODO I propose to use int in place of stm_word_t. Ok?
- * It should use a cacheline since it could close to something else (next to stmlib if static)
- * */
 static volatile int stop;
+static unsigned short main_seed[3];
 
 static inline void rand_init(unsigned short *seed)
 {
@@ -133,23 +134,44 @@ static inline int rand_range(int n, unsigned short *seed)
   return v;
 }
 
-/* ################################################################### *
- * THREAD-LOCAL
- * ################################################################### */
-
-#ifdef TLS
-static __thread unsigned short *rng_seed;
-#else /* ! TLS */
-static pthread_key_t rng_seed_key;
-#endif /* ! TLS */
+typedef struct thread_data {
+  struct intset *set;
+  struct barrier *barrier;
+  unsigned long nb_add;
+  unsigned long nb_remove;
+  unsigned long nb_contains;
+  unsigned long nb_found;
+#ifndef TM_COMPILER
+  unsigned long nb_aborts;
+  unsigned long nb_aborts_1;
+  unsigned long nb_aborts_2;
+  unsigned long nb_aborts_locked_read;
+  unsigned long nb_aborts_locked_write;
+  unsigned long nb_aborts_validate_read;
+  unsigned long nb_aborts_validate_write;
+  unsigned long nb_aborts_validate_commit;
+  unsigned long nb_aborts_invalid_memory;
+  unsigned long nb_aborts_killed;
+  unsigned long locked_reads_ok;
+  unsigned long locked_reads_failed;
+  unsigned long max_retries;
+#endif /* ! TM_COMPILER */
+  unsigned short seed[3];
+  int diff;
+  int range;
+  int update;
+  int alternate;
+#ifdef USE_LINKEDLIST
+  int unit_tx;
+#endif /* LINKEDLIST */
+  char padding[64];
+} thread_data_t;
 
 #if defined(USE_LINKEDLIST)
 
 /* ################################################################### *
  * LINKEDLIST
  * ################################################################### */
-
-# define TRANSACTIONAL                  (d->unit_tx + 1)
 
 # define INIT_SET_PARAMETERS            /* Nothing */
 
@@ -231,7 +253,7 @@ static int set_size(intset_t *set)
   return size;
 }
 
-static int set_contains(intset_t *set, val_t val, int transactional)
+static int set_contains(intset_t *set, val_t val, thread_data_t *td)
 {
   int result;
   node_t *prev, *next;
@@ -242,7 +264,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (transactional == 0) {
+  if (td == NULL) {
     prev = set->head;
     next = prev->next;
     while (next->val < val) {
@@ -250,7 +272,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
       next = prev->next;
     }
     result = (next->val == val);
-  } else if (transactional == 1) {
+  } else if (td->unit_tx == 0) {
     TM_START(0, RO);
     prev = (node_t *)TM_LOAD(&set->head);
     next = (node_t *)TM_LOAD(&prev->next);
@@ -302,7 +324,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-static int set_add(intset_t *set, val_t val, int transactional)
+static int set_add(intset_t *set, val_t val, thread_data_t *td)
 {
   int result;
   node_t *prev, *next;
@@ -313,7 +335,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (transactional == 0) {
+  if (td == NULL) {
     prev = set->head;
     next = prev->next;
     while (next->val < val) {
@@ -322,9 +344,9 @@ static int set_add(intset_t *set, val_t val, int transactional)
     }
     result = (next->val != val);
     if (result) {
-      prev->next = new_node(val, next, transactional);
+      prev->next = new_node(val, next, 0);
     }
-  } else if (transactional <= 2) {
+  } else if (td->unit_tx == 0) {
     TM_START(1, RW);
     prev = (node_t *)TM_LOAD(&set->head);
     next = (node_t *)TM_LOAD(&prev->next);
@@ -337,7 +359,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
     }
     result = (v != val);
     if (result) {
-      TM_STORE(&prev->next, new_node(val, next, transactional));
+      TM_STORE(&prev->next, new_node(val, next, 1));
     }
     TM_COMMIT;
   } 
@@ -387,7 +409,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-static int set_remove(intset_t *set, val_t val, int transactional)
+static int set_remove(intset_t *set, val_t val, thread_data_t *td)
 {
   int result;
   node_t *prev, *next;
@@ -399,7 +421,7 @@ static int set_remove(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (transactional == 0) {
+  if (td == NULL) {
     prev = set->head;
     next = prev->next;
     while (next->val < val) {
@@ -411,7 +433,7 @@ static int set_remove(intset_t *set, val_t val, int transactional)
       prev->next = next->next;
       free(next);
     }
-  } else if (transactional <= 3) {
+  } else if (td->unit_tx == 0) {
     TM_START(2, RW);
     prev = (node_t *)TM_LOAD(&set->head);
     next = (node_t *)TM_LOAD(&prev->next);
@@ -482,9 +504,8 @@ static int set_remove(intset_t *set, val_t val, int transactional)
 /* ################################################################### *
  * RBTREE
  * ################################################################### */
-/* TODO: compare function is pointer thus switch to irrevocable */
-# define TRANSACTIONAL                  1
-
+/* TODO: comparison function as a pointer should be changed for TM compiler
+ * (not supported or introduce a lot of overhead). */
 # define INIT_SET_PARAMETERS            /* Nothing */
 
 # define TM_ARGDECL_ALONE               /* Nothing */
@@ -503,7 +524,7 @@ static int set_remove(intset_t *set, val_t val, int transactional)
 
 # include "rbtree.c"
 
-typedef rbtree_t intset_t;
+typedef struct intset intset_t;
 typedef intptr_t val_t;
 
 static long compare(const void *a, const void *b)
@@ -513,12 +534,12 @@ static long compare(const void *a, const void *b)
 
 static intset_t *set_new()
 {
-  return rbtree_alloc(&compare);
+  return (intset_t *)rbtree_alloc(&compare);
 }
 
 static void set_delete(intset_t *set)
 {
-  rbtree_free(set);
+  rbtree_free((rbtree_t *)set);
 }
 
 static int set_size(intset_t *set)
@@ -526,19 +547,19 @@ static int set_size(intset_t *set)
   int size;
   node_t *n;
 
-  if (!rbtree_verify(set, 0)) {
+  if (!rbtree_verify((rbtree_t *)set, 0)) {
     printf("Validation failed!\n");
     exit(1);
   }
 
   size = 0;
-  for (n = firstEntry(set); n != NULL; n = successor(n))
+  for (n = firstEntry((rbtree_t *)set); n != NULL; n = successor(n))
     size++;
 
   return size;
 }
 
-static int set_contains(intset_t *set, val_t val, int transactional)
+static int set_contains(intset_t *set, val_t val, thread_data_t *td)
 {
   int result;
 
@@ -547,18 +568,18 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
-    result = rbtree_contains(set, (void *)val);
+  if (!td) {
+    result = rbtree_contains((rbtree_t *)set, (void *)val);
   } else {
     TM_START(0, RO);
-    result = TMrbtree_contains(set, (void *)val);
+    result = TMrbtree_contains((rbtree_t *)set, (void *)val);
     TM_COMMIT;
   }
 
   return result;
 }
 
-static int set_add(intset_t *set, val_t val, int transactional)
+static int set_add(intset_t *set, val_t val, thread_data_t *td)
 {
   int result;
 
@@ -567,18 +588,18 @@ static int set_add(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
-    result = rbtree_insert(set, (void *)val, (void *)val);
+  if (!td) {
+    result = rbtree_insert((rbtree_t *)set, (void *)val, (void *)val);
   } else {
     TM_START(1, RW);
-    result = TMrbtree_insert(set, (void *)val, (void *)val);
+    result = TMrbtree_insert((rbtree_t *)set, (void *)val, (void *)val);
     TM_COMMIT;
   }
 
   return result;
 }
 
-static int set_remove(intset_t *set, val_t val, int transactional)
+static int set_remove(intset_t *set, val_t val, thread_data_t *td)
 {
   int result;
 
@@ -587,11 +608,11 @@ static int set_remove(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
-    result = rbtree_delete(set, (void *)val);
+  if (!td) {
+    result = rbtree_delete((rbtree_t *)set, (void *)val);
   } else {
     TM_START(2, RW);
-    result = TMrbtree_delete(set, (void *)val);
+    result = TMrbtree_delete((rbtree_t *)set, (void *)val);
     TM_COMMIT;
   }
 
@@ -603,8 +624,6 @@ static int set_remove(intset_t *set, val_t val, int transactional)
 /* ################################################################### *
  * SKIPLIST
  * ################################################################### */
-
-# define TRANSACTIONAL                  1
 
 # define MAX_LEVEL                      64
 
@@ -630,22 +649,10 @@ typedef struct intset {
 } intset_t;
 
 TM_PURE
-static inline int rand_100()
-{
-  unsigned short *seed;
-# ifdef TLS
-  seed = rng_seed;
-# else /* ! TLS */
-  seed = (unsigned short *)pthread_getspecific(rng_seed_key);
-# endif /* ! TLS */
-  return rand_range(100, seed);
-}
-
-TM_PURE
-static int random_level(intset_t *set)
+static int random_level(intset_t *set, unsigned short *seed)
 {
   int l = 0;
-  while (l < set->max_level && rand_100() < set->prob)
+  while (l < set->max_level && rand_range(100, seed) < set->prob)
     l++;
   return l;
 }
@@ -725,7 +732,7 @@ static int set_size(intset_t *set)
   return size;
 }
 
-static int set_contains(intset_t *set, val_t val, int transactional)
+static int set_contains(intset_t *set, val_t val, thread_data_t *td)
 {
   int result, i;
   node_t *node, *next;
@@ -736,7 +743,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
+  if (!td) {
     node = set->head;
     for (i = set->level; i >= 0; i--) {
       next = node->forward[i];
@@ -768,7 +775,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-static int set_add(intset_t *set, val_t val, int transactional)
+static int set_add(intset_t *set, val_t val, thread_data_t *td)
 {
   int result, i;
   node_t *update[MAX_LEVEL + 1];
@@ -781,7 +788,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
+  if (!td) {
     node = set->head;
     for (i = set->level; i >= 0; i--) {
       next = node->forward[i];
@@ -796,13 +803,13 @@ static int set_add(intset_t *set, val_t val, int transactional)
     if (node->val == val) {
       result = 0;
     } else {
-      l = random_level(set);
+      l = random_level(set, main_seed);
       if (l > set->level) {
         for (i = set->level + 1; i <= l; i++)
           update[i] = set->head;
         set->level = l;
       }
-      node = new_node(val, l, transactional);
+      node = new_node(val, l, 0);
       for (i = 0; i <= l; i++) {
         node->forward[i] = update[i]->forward[i];
         update[i]->forward[i] = node;
@@ -829,13 +836,13 @@ static int set_add(intset_t *set, val_t val, int transactional)
     if (v == val) {
       result = 0;
     } else {
-      l = random_level(set);
+      l = random_level(set, td->seed);
       if (l > level) {
         for (i = level + 1; i <= l; i++)
           update[i] = set->head;
         TM_STORE(&set->level, l);
       }
-      node = new_node(val, l, transactional);
+      node = new_node(val, l, 1);
       for (i = 0; i <= l; i++) {
         node->forward[i] = (node_t *)TM_LOAD(&update[i]->forward[i]);
         TM_STORE(&update[i]->forward[i], node);
@@ -848,7 +855,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-static int set_remove(intset_t *set, val_t val, int transactional)
+static int set_remove(intset_t *set, val_t val, thread_data_t *td)
 {
   int result, i;
   node_t *update[MAX_LEVEL + 1];
@@ -861,7 +868,7 @@ static int set_remove(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
+  if (!td) {
     node = set->head;
     for (i = set->level; i >= 0; i--) {
       next = node->forward[i];
@@ -930,8 +937,6 @@ static int set_remove(intset_t *set, val_t val, int transactional)
 /* ################################################################### *
  * HASHSET
  * ################################################################### */
-
-# define TRANSACTIONAL                  1
 
 # define INIT_SET_PARAMETERS            /* Nothing */
 
@@ -1029,7 +1034,7 @@ static int set_size(intset_t *set)
   return size;
 }
 
-static int set_contains(intset_t *set, val_t val, int transactional)
+static int set_contains(intset_t *set, val_t val, thread_data_t *td)
 {
   int result, i;
   bucket_t *b;
@@ -1039,7 +1044,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
+  if (!td) {
     i = HASH(val);
     b = set->buckets[i];
     result = 0;
@@ -1068,7 +1073,7 @@ static int set_contains(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-static int set_add(intset_t *set, val_t val, int transactional)
+static int set_add(intset_t *set, val_t val, thread_data_t *td)
 {
   int result, i;
   bucket_t *b, *first;
@@ -1078,7 +1083,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
+  if (!td) {
     i = HASH(val);
     first = b = set->buckets[i];
     result = 1;
@@ -1090,7 +1095,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
       b = b->next;
     }
     if (result) {
-      set->buckets[i] = new_entry(val, first, transactional);
+      set->buckets[i] = new_entry(val, first, 0);
     }
   } else {
     TM_START(0, RW);
@@ -1105,7 +1110,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
       b = (bucket_t *)TM_LOAD(&b->next);
     }
     if (result) {
-      TM_STORE(&set->buckets[i], new_entry(val, first, transactional));
+      TM_STORE(&set->buckets[i], new_entry(val, first, 1));
     }
     TM_COMMIT;
   }
@@ -1113,7 +1118,7 @@ static int set_add(intset_t *set, val_t val, int transactional)
   return result;
 }
 
-static int set_remove(intset_t *set, val_t val, int transactional)
+static int set_remove(intset_t *set, val_t val, thread_data_t *td)
 {
   int result, i;
   bucket_t *b, *prev;
@@ -1123,7 +1128,7 @@ static int set_remove(intset_t *set, val_t val, int transactional)
   IO_FLUSH;
 # endif
 
-  if (!transactional) {
+  if (!td) {
     i = HASH(val);
     prev = b = set->buckets[i];
     result = 0;
@@ -1214,49 +1219,10 @@ static void barrier_cross(barrier_t *b)
  * STRESS TEST
  * ################################################################### */
 
-typedef struct thread_data {
-  intset_t *set;
-  barrier_t *barrier;
-  unsigned long nb_add;
-  unsigned long nb_remove;
-  unsigned long nb_contains;
-  unsigned long nb_found;
-#ifndef TM_COMPILER
-  unsigned long nb_aborts;
-  unsigned long nb_aborts_1;
-  unsigned long nb_aborts_2;
-  unsigned long nb_aborts_locked_read;
-  unsigned long nb_aborts_locked_write;
-  unsigned long nb_aborts_validate_read;
-  unsigned long nb_aborts_validate_write;
-  unsigned long nb_aborts_validate_commit;
-  unsigned long nb_aborts_invalid_memory;
-  unsigned long nb_aborts_killed;
-  unsigned long locked_reads_ok;
-  unsigned long locked_reads_failed;
-  unsigned long max_retries;
-#endif /* ! TM_COMPILER */
-  unsigned short seed[3];
-  int diff;
-  int range;
-  int update;
-  int alternate;
-#ifdef USE_LINKEDLIST
-  int unit_tx;
-#endif /* LINKEDLIST */
-  char padding[64];
-} thread_data_t;
-
 static void *test(void *data)
 {
   int op, val, last = -1;
   thread_data_t *d = (thread_data_t *)data;
-
-#ifdef TLS
-  rng_seed = d->seed;
-#else /* ! TLS */
-  pthread_setspecific(rng_seed_key, d->seed);
-#endif /* ! TLS */
 
   /* Create transaction */
   TM_INIT_THREAD;
@@ -1271,14 +1237,14 @@ static void *test(void *data)
         if (last < 0) {
           /* Add random value */
           val = rand_range(d->range, d->seed) + 1;
-          if (set_add(d->set, val, TRANSACTIONAL)) {
+          if (set_add(d->set, val, d)) {
             d->diff++;
             last = val;
           }
           d->nb_add++;
         } else {
           /* Remove last value */
-          if (set_remove(d->set, last, TRANSACTIONAL))
+          if (set_remove(d->set, last, d))
             d->diff--;
           d->nb_remove++;
           last = -1;
@@ -1288,12 +1254,12 @@ static void *test(void *data)
         val = rand_range(d->range, d->seed) + 1;
         if ((op & 0x01) == 0) {
           /* Add random value */
-          if (set_add(d->set, val, TRANSACTIONAL))
+          if (set_add(d->set, val, d))
             d->diff++;
           d->nb_add++;
         } else {
           /* Remove random value */
-          if (set_remove(d->set, val, TRANSACTIONAL))
+          if (set_remove(d->set, val, d))
             d->diff--;
           d->nb_remove++;
         }
@@ -1301,7 +1267,7 @@ static void *test(void *data)
     } else {
       /* Look for random value */
       val = rand_range(d->range, d->seed) + 1;
-      if (set_contains(d->set, val, TRANSACTIONAL))
+      if (set_contains(d->set, val, d))
         d->nb_found++;
       d->nb_contains++;
     }
@@ -1325,15 +1291,6 @@ static void *test(void *data)
   TM_EXIT_THREAD;
 
   return NULL;
-}
-
-static void catcher(int sig)
-{
-  static int nb = 0;
-  // TODO this signal isn t really usefull. We don't do some particular like aborting
-  printf("CAUGHT SIGNAL %d\n", sig);
-  if (++nb >= 3)
-    exit(1);
 }
 
 int main(int argc, char **argv)
@@ -1388,7 +1345,6 @@ int main(int argc, char **argv)
 #ifdef USE_LINKEDLIST
   int unit_tx = 0;
 #endif /* LINKEDLIST */
-  unsigned short main_seed[3];
   sigset_t block_set;
 
   while(1) {
@@ -1397,7 +1353,6 @@ int main(int argc, char **argv)
 #ifndef TM_COMPILER
                     "c:"
 #endif /* ! TM_COMPILER */
-		    // TODO need to be alpha-ordered?
                     "d:i:n:r:s:u:"
 #ifdef USE_LINKEDLIST
                     "x"
@@ -1512,7 +1467,7 @@ int main(int argc, char **argv)
 #endif /* defined(USE_HASHSET) */
 #ifndef TM_COMPILER
   printf("CM           : %s\n", (cm == NULL ? "DEFAULT" : cm));
-#endif /* TM_COMPILER */
+#endif /* ! TM_COMPILER */
   printf("Duration     : %d\n", duration);
   printf("Initial size : %d\n", initial);
   printf("Nb threads   : %d\n", nb_threads);
@@ -1552,15 +1507,6 @@ int main(int argc, char **argv)
 
   /* Thread-local seed for main thread */
   rand_init(main_seed);
-#ifdef TLS
-  rng_seed = main_seed;
-#else /* ! TLS */
-  if (pthread_key_create(&rng_seed_key, NULL) != 0) {
-    fprintf(stderr, "Error creating thread local\n");
-    exit(1);
-  }
-  pthread_setspecific(rng_seed_key, main_seed);
-#endif /* ! TLS */
 
   /* Init STM */
   printf("Initializing STM\n");
@@ -1631,14 +1577,6 @@ int main(int argc, char **argv)
   }
   pthread_attr_destroy(&attr);
 
-  /* Catch some signals */
-  if (signal(SIGHUP, catcher) == SIG_ERR ||
-      signal(SIGINT, catcher) == SIG_ERR ||
-      signal(SIGTERM, catcher) == SIG_ERR) {
-    perror("signal");
-    exit(1);
-  }
- 
   /* Start threads */
   barrier_cross(&barrier);
 
@@ -1758,10 +1696,6 @@ int main(int argc, char **argv)
 
   /* Cleanup STM */
   TM_EXIT;
-
-#ifndef TLS
-  pthread_key_delete(rng_seed_key);
-#endif /* ! TLS */
 
   free(threads);
   free(data);

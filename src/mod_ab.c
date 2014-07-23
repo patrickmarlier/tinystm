@@ -7,7 +7,7 @@
  * Description:
  *   Module for gathering statistics about atomic blocks.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -25,6 +28,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include <pthread.h>
 
@@ -73,8 +77,8 @@ typedef struct samples_buffer {         /* Buffer to hold samples */
 static int mod_ab_key;
 static int mod_ab_initialized = 0;
 static int sampling_period;             /* Inverse sampling frequency */
-static int reservoir_size;              /* Size of Vitter's reservoir */
-static int (*check_fn)(TXPARAM);        /* Function to check sample validity */
+static unsigned int reservoir_size;     /* Size of Vitter's reservoir */
+static int (*check_fn)(void);           /* Function to check sample validity */
 
 static unsigned int seed;               /* Global PNRG's seed */
 
@@ -219,14 +223,21 @@ static double sc_percentile(smart_counter_t *c, int percentile)
 }
 
 /*
- * Returns the instruction count.
+ * Returns a time measurement (clock ticks for x86).
  */
-static inline uint64_t rdtsc() {
-  /* TODO use gettimeofday if not x86. moreover you must ensure there is no 
-   * thread migration to be good on x86. */
+static inline uint64_t get_time(void) {
+#if defined(__x86_64__) || defined(__amd64__) || defined(__i386__)
   uint32_t lo, hi;
+  /* Note across cores the counter is not fully synchronized.
+   * The serializing instruction is rdtscp. */
   __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
-  return (uint64_t)hi << 32 | lo;
+  /* __asm__ __volatile__("rdtscp" : "=a"(lo), "=d"(hi) :: "ecx" ); */
+  return (((uint64_t)hi) << 32) | (((uint64_t)lo) & 0xffffffff);
+#else
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (uint64_t)(tv.tv_sec * 1000000 + tv.tv_usec);
+#endif
 }
 
 /*
@@ -266,7 +277,7 @@ static void sc_add_samples(samples_buffer_t *samples)
 /*
  * Clean up module.
  */
-static void cleanup()
+static void cleanup(void)
 {
   pthread_mutex_destroy(&ab_mutex);
 }
@@ -274,7 +285,7 @@ static void cleanup()
 /*
  * Called upon thread creation.
  */
-static void mod_ab_on_thread_init(TXPARAMS void *arg)
+static void mod_ab_on_thread_init(void *arg)
 {
   samples_buffer_t *samples;
 
@@ -289,17 +300,17 @@ static void mod_ab_on_thread_init(TXPARAMS void *arg)
   samples->seed[1] = (unsigned short)rand_r(&seed);
   samples->seed[2] = (unsigned short)rand_r(&seed);
   pthread_mutex_unlock(&ab_mutex);
-  stm_set_specific(TXARGS mod_ab_key, samples);
+  stm_set_specific(mod_ab_key, samples);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void mod_ab_on_thread_exit(TXPARAMS void *arg)
+static void mod_ab_on_thread_exit(void *arg)
 {
   samples_buffer_t *samples;
 
-  samples = (samples_buffer_t *)stm_get_specific(TXARGS mod_ab_key);
+  samples = (samples_buffer_t *)stm_get_specific(mod_ab_key);
   assert(samples != NULL);
 
   sc_add_samples(samples);
@@ -310,35 +321,35 @@ static void mod_ab_on_thread_exit(TXPARAMS void *arg)
 /*
  * Called upon transaction start.
  */
-static void mod_ab_on_start(TXPARAMS void *arg)
+static void mod_ab_on_start(void *arg)
 {
   samples_buffer_t *samples;
 
-  samples = (samples_buffer_t *)stm_get_specific(TXARGS mod_ab_key);
+  samples = (samples_buffer_t *)stm_get_specific(mod_ab_key);
   assert(samples != NULL);
 
-  samples->start = rdtsc();
+  samples->start = get_time();
 }
 
 /*
  * Called upon transaction commit.
  */
-static void mod_ab_on_commit(TXPARAMS void *arg)
+static void mod_ab_on_commit(void *arg)
 {
   samples_buffer_t *samples;
-  stm_tx_attr_t *attrs;
+  stm_tx_attr_t attrs;
   unsigned long length;
 
-  samples = (samples_buffer_t *)stm_get_specific(TXARGS mod_ab_key);
+  samples = (samples_buffer_t *)stm_get_specific(mod_ab_key);
   assert(samples != NULL);
 
-  if (check_fn == NULL || check_fn(TXARG)) {
-    length = rdtsc() - samples->start;
+  if (check_fn == NULL || check_fn()) {
+    length = get_time() - samples->start;
     samples->total++;
     /* Should be keep this sample? */
     if ((samples->total % sampling_period) == 0) {
-      attrs = stm_get_attributes(TXARG);
-      samples->buffer[samples->nb].id = (attrs == NULL ? 0 : attrs->id);
+      attrs = stm_get_attributes();
+      samples->buffer[samples->nb].id = attrs.id;
       samples->buffer[samples->nb].length = length;
       /* Is buffer full? */
       if (++samples->nb == BUFFER_SIZE) {
@@ -352,14 +363,14 @@ static void mod_ab_on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void mod_ab_on_abort(TXPARAMS void *arg)
+static void mod_ab_on_abort(void *arg)
 {
   samples_buffer_t *samples;
 
-  samples = (samples_buffer_t *)stm_get_specific(TXARGS mod_ab_key);
+  samples = (samples_buffer_t *)stm_get_specific(mod_ab_key);
   assert(samples != NULL);
 
-  samples->start = rdtsc();
+  samples->start = get_time();
 }
 
 /*
@@ -400,7 +411,7 @@ int stm_get_ab_stats(int id, stm_ab_stats_t *stats)
 /*
  * Initialize module.
  */
-void mod_ab_init(int freq, int (*check)(TXPARAM))
+void mod_ab_init(int freq, int (*check)(void))
 {
   int i;
   char *s;
@@ -414,7 +425,7 @@ void mod_ab_init(int freq, int (*check)(TXPARAM))
   sampling_period = (freq <= 0 ? SAMPLING_PERIOD_DEFAULT : freq);
   s = getenv(RESERVOIR_SIZE);
   if (s != NULL)
-    reservoir_size = (int)strtol(s, NULL, 10);
+    reservoir_size = (unsigned int)strtol(s, NULL, 10);
   else
     reservoir_size = RESERVOIR_SIZE_DEFAULT;
   check_fn = check;

@@ -7,7 +7,7 @@
  * Description:
  *   Module for logging memory accesses.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /**
@@ -30,7 +33,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2011
+ *   2007-2012
  */
 
 #ifndef _MOD_LOG_H_
@@ -48,7 +51,7 @@ extern "C" {
  * @param addr
  *   Address of the memory location.
  */
-void stm_log(TXPARAMS stm_word_t *addr);
+void stm_log(stm_word_t *addr);
 
 /**
  * Log char 8-bit value in transaction log.
@@ -56,7 +59,7 @@ void stm_log(TXPARAMS stm_word_t *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_u8(TXPARAMS uint8_t *addr);
+void stm_log_u8(uint8_t *addr);
 
 /**
  * Log char 16-bit value in transaction log.
@@ -64,7 +67,7 @@ void stm_log_u8(TXPARAMS uint8_t *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_u16(TXPARAMS uint16_t *addr);
+void stm_log_u16(uint16_t *addr);
 
 /**
  * Log char 32-bit value in transaction log.
@@ -72,7 +75,7 @@ void stm_log_u16(TXPARAMS uint16_t *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_u32(TXPARAMS uint32_t *addr);
+void stm_log_u32(uint32_t *addr);
 
 /**
  * Log char 64-bit value in transaction log.
@@ -80,7 +83,7 @@ void stm_log_u32(TXPARAMS uint32_t *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_u64(TXPARAMS uint64_t *addr);
+void stm_log_u64(uint64_t *addr);
 
 /**
  * Log char value in transaction log.
@@ -88,7 +91,7 @@ void stm_log_u64(TXPARAMS uint64_t *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_char(TXPARAMS char *addr);
+void stm_log_char(char *addr);
 
 /**
  * Log unsigned char value in transaction log.
@@ -96,7 +99,7 @@ void stm_log_char(TXPARAMS char *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_uchar(TXPARAMS unsigned char *addr);
+void stm_log_uchar(unsigned char *addr);
 
 /**
  * Log short value in transaction log.
@@ -104,7 +107,7 @@ void stm_log_uchar(TXPARAMS unsigned char *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_short(TXPARAMS short *addr);
+void stm_log_short(short *addr);
 
 /**
  * Log unsigned short value in transaction log.
@@ -112,7 +115,7 @@ void stm_log_short(TXPARAMS short *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_ushort(TXPARAMS unsigned short *addr);
+void stm_log_ushort(unsigned short *addr);
 
 /**
  * Log int value in transaction log.
@@ -120,7 +123,7 @@ void stm_log_ushort(TXPARAMS unsigned short *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_int(TXPARAMS int *addr);
+void stm_log_int(int *addr);
 
 /**
  * Log unsigned int value in transaction log.
@@ -128,7 +131,7 @@ void stm_log_int(TXPARAMS int *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_uint(TXPARAMS unsigned int *addr);
+void stm_log_uint(unsigned int *addr);
 
 /**
  * Log long value in transaction log.
@@ -136,7 +139,7 @@ void stm_log_uint(TXPARAMS unsigned int *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_long(TXPARAMS long *addr);
+void stm_log_long(long *addr);
 
 /**
  * Log unsigned long value in transaction log.
@@ -144,7 +147,7 @@ void stm_log_long(TXPARAMS long *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_ulong(TXPARAMS unsigned long *addr);
+void stm_log_ulong(unsigned long *addr);
 
 /**
  * Log float value in transaction log.
@@ -152,7 +155,7 @@ void stm_log_ulong(TXPARAMS unsigned long *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_float(TXPARAMS float *addr);
+void stm_log_float(float *addr);
 
 /**
  * Log double value in transaction log.
@@ -160,7 +163,7 @@ void stm_log_float(TXPARAMS float *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_double(TXPARAMS double *addr);
+void stm_log_double(double *addr);
 
 /**
  * Log pointer value in transaction log.
@@ -168,7 +171,7 @@ void stm_log_double(TXPARAMS double *addr);
  * @param addr
  *   Address of the memory location.
  */
-void stm_log_ptr(TXPARAMS void **addr);
+void stm_log_ptr(void **addr);
 
 /**
  * Log memory region in transaction log.
@@ -178,14 +181,14 @@ void stm_log_ptr(TXPARAMS void **addr);
  * @param size
  *   Number of bytes to log.
  */
-void stm_log_bytes(TXPARAMS uint8_t *addr, size_t size);
+void stm_log_bytes(uint8_t *addr, size_t size);
 
 /**
  * Initialize the module.  This function must be called once, from the
  * main thread, after initializing the STM library and before performing
  * any transactional operation.
  */
-void mod_log_init();
+void mod_log_init(void);
 
 # ifdef __cplusplus
 }

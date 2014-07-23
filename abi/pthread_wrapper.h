@@ -1,3 +1,28 @@
+/*
+ * File:
+ *   pthread_wrapper.h
+ * Author(s):
+ *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
+ * Description:
+ *   Pthread wrapper to handle thread creation.
+ *
+ * Copyright (c) 2007-2012.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation, version 2
+ * of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
+ */
+
 #include <dlfcn.h> 
 
 /* Original pthread function */
@@ -38,11 +63,11 @@ int pthread_create(pthread_t *__restrict thread,
   wdata->start_routine = start_routine;
   wdata->arg = arg;
   /* Solving link to original pthread_create */
-  if(pthread_create_orig == NULL) {
+  if (pthread_create_orig == NULL) {
     pthread_create_orig = dlsym(RTLD_NEXT, "pthread_create");
     if (pthread_create_orig == NULL) {
       char *error = dlerror();
-      if(error == NULL) {
+      if (error == NULL) {
         error = "pthread_create can't be solved.";
       }  
       fprintf(stderr, "%s\n", error);
@@ -50,6 +75,6 @@ int pthread_create(pthread_t *__restrict thread,
     }
   }
   /* Call original pthread function */
-  i_return = pthread_create_orig(thread,attr,wpthread_create,wdata);
+  i_return = pthread_create_orig(thread, attr, wpthread_create, wdata);
   return i_return;
 }

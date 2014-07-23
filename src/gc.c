@@ -7,7 +7,7 @@
  * Description:
  *   Epoch-based garbage collector.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -26,6 +29,7 @@
 
 #include <pthread.h>
 
+#include "tls.h"
 #include "gc.h"
 
 #include "atomic.h"
@@ -89,7 +93,7 @@ typedef struct gc_thread {              /* Descriptor of an active thread */
       unsigned int frees;               /* How many blocks have been freed? */
 #endif /* ! NO_PERIODIC_CLEANUP */
     };
-    char padding[64];                   /* Padding (should be at least a cache line) */
+    char padding[CACHELINE_SIZE];       /* Padding (should be at least a cache line) */
   };
 } gc_thread_t;
 
@@ -98,13 +102,7 @@ static struct {                         /* Descriptors of active threads */
   volatile gc_word_t nb_active;         /* Number of used thread slots */
 } gc_threads;
 
-static gc_word_t (*gc_current_epoch)(); /* Read the value of the current epoch */
-
-#ifdef TLS
-static __thread int gc_thread_idx;
-#else /* ! TLS */
-static pthread_key_t gc_thread_idx;
-#endif /* ! TLS */
+static gc_word_t (*gc_current_epoch)(void); /* Read the value of the current epoch */
 
 /* ################################################################### *
  * STATIC
@@ -113,13 +111,9 @@ static pthread_key_t gc_thread_idx;
 /*
  * Returns the index of the CURRENT thread.
  */
-static inline int gc_get_idx()
+static inline int gc_get_idx(void)
 {
-#ifdef TLS
-  return gc_thread_idx;
-#else /* ! TLS */
-  return (int)(gc_word_t)pthread_getspecific(gc_thread_idx);
-#endif /* ! TLS */
+  return tls_get_gc();
 }
 
 /*
@@ -216,7 +210,7 @@ void gc_cleanup_thread(int idx, gc_word_t min)
 /*
  * Initialize GC library (to be called from main thread).
  */
-void gc_init(gc_word_t (*epoch)())
+void gc_init(gc_word_t (*epoch)(void))
 {
   int i;
 
@@ -236,18 +230,12 @@ void gc_init(gc_word_t (*epoch)())
 #endif /* ! NO_PERIODIC_CLEANUP */
   }
   gc_threads.nb_active = 0;
-#ifndef TLS
-  if (pthread_key_create(&gc_thread_idx, NULL) != 0) {
-    fprintf(stderr, "Error creating thread local\n");
-    exit(1);
-  }
-#endif /* ! TLS */
 }
 
 /*
  * Clean up GC library (to be called from main thread).
  */
-void gc_exit()
+void gc_exit(void)
 {
   int i;
 
@@ -268,7 +256,7 @@ void gc_exit()
 /*
  * Initialize thread-specific GC resources (to be called once by each thread).
  */
-void gc_init_thread()
+void gc_init_thread(void)
 {
   int i, idx;
   gc_word_t used;
@@ -297,11 +285,7 @@ void gc_init_thread()
     if (++i >= MAX_GC_THREADS)
       i = 0;
   }
-#ifdef TLS
-  gc_thread_idx = idx;
-#else /* ! TLS */
-  pthread_setspecific(gc_thread_idx, (void *)(gc_word_t)idx);
-#endif /* ! TLS */
+  tls_set_gc(idx);
 
   PRINT_DEBUG("==> gc_init_thread(i=%d)\n", idx);
 }
@@ -309,7 +293,7 @@ void gc_init_thread()
 /*
  * Clean up thread-specific GC resources (to be called once by each thread).
  */
-void gc_exit_thread()
+void gc_exit_thread(void)
 {
   int idx = gc_get_idx();
   /* NOTA: if gc_exit_thread is not called when it finishes, others threads will not free chunks. */
@@ -395,7 +379,7 @@ void gc_free(void *addr, gc_word_t epoch)
  * Garbage-collect old data associated with the current thread (should
  * be called periodically).
  */
-void gc_cleanup()
+void gc_cleanup(void)
 {
   gc_word_t min;
   int idx = gc_get_idx();
@@ -416,7 +400,7 @@ void gc_cleanup()
  * Garbage-collect old data associated with all threads (should be
  * called periodically).
  */
-void gc_cleanup_all()
+void gc_cleanup_all(void)
 {
   int i;
   gc_word_t min = EPOCH_MAX;
@@ -441,7 +425,7 @@ void gc_cleanup_all()
  * Reset all epochs for all threads (must be called with all threads
  * stopped and out of transactions, e.g., upon roll-over).
  */
-void gc_reset()
+void gc_reset(void)
 {
   int i;
 

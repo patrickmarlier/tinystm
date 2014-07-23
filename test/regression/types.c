@@ -7,7 +7,7 @@
  * Description:
  *   Regression test for various data types.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #ifdef NDEBUG
@@ -84,7 +87,7 @@ enum {
 volatile int verbose;
 volatile int stop;
 
-void compare(int idx, val_t val, int type, int size)
+static void compare(int idx, val_t val, int type, int size)
 {
   int i;
   val_t v;
@@ -193,13 +196,13 @@ void compare(int idx, val_t val, int type, int size)
   }
 }
 
-void test_loads()
+static void test_loads()
 {
   int i, j;
   val_t val;
   sigjmp_buf *e;
 
-  e = stm_start(NULL);
+  e = stm_start((stm_tx_attr_t)0);
   if (e != NULL)
     sigsetjmp(*e, 0);
 
@@ -323,13 +326,13 @@ void test_loads()
   stm_commit();
 }
 
-void test_stores()
+static void test_stores()
 {
   int i, j;
   val_t val, bytes;
   sigjmp_buf *e;
 
-  e = stm_start(NULL);
+  e = stm_start((stm_tx_attr_t)0);
   if (e != NULL)
     sigsetjmp(*e, 0);
 
@@ -494,7 +497,7 @@ void test_stores()
   stm_commit();
 }
 
-void *test(void *v)
+static void *test(void *v)
 {
   unsigned int seed;
   int nested, store;
@@ -506,7 +509,7 @@ void *test(void *v)
     nested = (rand_r(&seed) < RAND_MAX / 3);
     store = (rand_r(&seed) < RAND_MAX / 3);
     if (nested) {
-      e = stm_start(NULL);
+      e = stm_start((stm_tx_attr_t)0);
       if (e != NULL)
         sigsetjmp(*e, 0);
     }

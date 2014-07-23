@@ -15,7 +15,7 @@ LLVMCC ?= llvm-gcc
 LLVMLD ?= llvm-ld
 LLC    ?= llc
 
-CFLAGS += -DTM_DTMC 
+CPPFLAGS += -DTM_DTMC -I. 
 
 # TODO find a way to avoid compiling not
 #LLVMCC_OK = $(shell $(LLVMCC) ; if [ $$? -neq 0 ] ; then echo "no differences" ; fi)
@@ -27,20 +27,20 @@ CFLAGS += -DTM_DTMC
 # TODO Add possibility to create 32 bits lib => llvm-ld needs -m32?
 # TODO find a good way to add dependencies abi.c tanger.c arch.S and also the lib (otherwise it will not be built or updated)
 #%.bc:   ../%.c
-#	$(LLVMCC) $(CFLAGS) $(DEF_ABI) -emit-llvm -c -o $@ $<
+#	$(LLVMCC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -emit-llvm -c -o $@ $<
 
 dtmc: 	dtmc-bc dtmc-static
 
-libtanger-stm.bc: 	../abi.c tanger.c
-	$(LLVMCC) $(CFLAGS) $(DEF_ABI) -emit-llvm -c -o abi.bc ../abi.c
+libtanger-stm.bc: 	../abi.c tanger.c tanger.h
+	$(LLVMCC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -emit-llvm -c -o abi.bc ../abi.c
 	$(LLVMLD) -link-as-library -o $@ abi.bc
 
-arch.o: 	../arch.S
-	$(CC) $(CFLAGS) -o $@ -c $<
+arch.o: 	arch.S
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ -c $<
 
 dtmc-static: 	libtanger-stm.bc arch.o 
 	$(LLC) libtanger-stm.bc -o libtanger-stm.s
-	$(CC) $(CFLAGS) -c libtanger-stm.s -o libtanger-stm.o
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c libtanger-stm.s -o libtanger-stm.o
 	$(AR) cru libitm.a libtanger-stm.o arch.o
 
 dtmc-bc: 	libtanger-stm.bc arch.o
@@ -67,8 +67,9 @@ TESTCC          ?= $(LLVMCC)
 TESTCFLAGS      += $(LLVMCCFLAGS) -DTM_DTMC
 
 TESTLD          ?= $(TMLINK)
-TESTLDFLAGS     := $(TMLINKFLAGS) $(TESTLDFLAGS) -static 
+TESTLDFLAGS     := $(TMLINKFLAGS) $(TESTLDFLAGS) 
+# TESTLDFLAGS     += -static 
 
-clean: 	intset-clean intsetasf-clean
-	rm -f *.bc *.o libtanger-stm.bc libtanger-stm.a
+clean: 	intset-clean
+	rm -f *.bc *.o libtanger-stm.bc libtanger-stm.a libitm.a libtanger-stm.s
 

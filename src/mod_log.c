@@ -7,7 +7,7 @@
  * Description:
  *   Module for logging memory accesses.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -97,7 +100,7 @@ static int mod_log_initialized = 0;
 /*
  * Called by the CURRENT thread to obtain log entry.
  */
-static inline mod_log_w_entry_t *get_entry(TXPARAM)
+static inline mod_log_w_entry_t *get_entry(void)
 {
   mod_log_w_set_t *ws;
 
@@ -107,7 +110,7 @@ static inline mod_log_w_entry_t *get_entry(TXPARAM)
   }
 
   /* Store in undo log */
-  ws = (mod_log_w_set_t *)stm_get_specific(TXARGS mod_log_key);
+  ws = (mod_log_w_set_t *)stm_get_specific(mod_log_key);
   assert(ws != NULL);
 
   if (ws->nb_entries == ws->size) {
@@ -126,153 +129,153 @@ static inline mod_log_w_entry_t *get_entry(TXPARAM)
  * FUNCTIONS
  * ################################################################### */
 
-void stm_log(TXPARAMS stm_word_t *addr)
+void stm_log(stm_word_t *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_WORD;
   w->data.w.a = addr;
   w->data.w.v = *addr;
 }
 
-void stm_log_u8(TXPARAMS uint8_t *addr)
+void stm_log_u8(uint8_t *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_U8;
   w->data.u8.a = addr;
   w->data.u8.v = *addr;
 }
 
-void stm_log_u16(TXPARAMS uint16_t *addr)
+void stm_log_u16(uint16_t *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_U16;
   w->data.u16.a = addr;
   w->data.u16.v = *addr;
 }
 
-void stm_log_u32(TXPARAMS uint32_t *addr)
+void stm_log_u32(uint32_t *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_U32;
   w->data.u32.a = addr;
   w->data.u32.v = *addr;
 }
 
-void stm_log_u64(TXPARAMS uint64_t *addr)
+void stm_log_u64(uint64_t *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_U64;
   w->data.u64.a = addr;
   w->data.u64.v = *addr;
 }
 
-void stm_log_char(TXPARAMS char *addr)
+void stm_log_char(char *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_CHAR;
   w->data.c.a = addr;
   w->data.c.v = *addr;
 }
 
-void stm_log_uchar(TXPARAMS unsigned char *addr)
+void stm_log_uchar(unsigned char *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_UCHAR;
   w->data.uc.a = addr;
   w->data.uc.v = *addr;
 }
 
-void stm_log_short(TXPARAMS short *addr)
+void stm_log_short(short *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_SHORT;
   w->data.s.a = addr;
   w->data.s.v = *addr;
 }
 
-void stm_log_ushort(TXPARAMS unsigned short *addr)
+void stm_log_ushort(unsigned short *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_USHORT;
   w->data.us.a = addr;
   w->data.us.v = *addr;
 }
 
-void stm_log_int(TXPARAMS int *addr)
+void stm_log_int(int *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_INT;
   w->data.i.a = addr;
   w->data.i.v = *addr;
 }
 
-void stm_log_uint(TXPARAMS unsigned int *addr)
+void stm_log_uint(unsigned int *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_UINT;
   w->data.ui.a = addr;
   w->data.ui.v = *addr;
 }
 
-void stm_log_long(TXPARAMS long *addr)
+void stm_log_long(long *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_LONG;
   w->data.l.a = addr;
   w->data.l.v = *addr;
 }
 
-void stm_log_ulong(TXPARAMS unsigned long *addr)
+void stm_log_ulong(unsigned long *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_ULONG;
   w->data.ul.a = addr;
   w->data.ul.v = *addr;
 }
 
-void stm_log_float(TXPARAMS float *addr)
+void stm_log_float(float *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_FLOAT;
   w->data.f.a = addr;
   w->data.f.v = *addr;
 }
 
-void stm_log_double(TXPARAMS double *addr)
+void stm_log_double(double *addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_DOUBLE;
   w->data.d.a = addr;
   w->data.d.v = *addr;
 }
 
-void stm_log_ptr(TXPARAMS void **addr)
+void stm_log_ptr(void **addr)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_PTR;
   w->data.p.a = addr;
   w->data.p.v = *addr;
 }
 
-void stm_log_bytes(TXPARAMS uint8_t *addr, size_t size)
+void stm_log_bytes(uint8_t *addr, size_t size)
 {
-  mod_log_w_entry_t *w = get_entry(TXARG);
+  mod_log_w_entry_t *w = get_entry();
 
   w->type = TYPE_BYTES;
   w->data.b.a = addr;
@@ -284,13 +287,13 @@ void stm_log_bytes(TXPARAMS uint8_t *addr, size_t size)
   memcpy(w->data.b.v, addr, size);
 
   /* Remember we have allocated memory */
-  ((mod_log_w_set_t *)stm_get_specific(TXARGS mod_log_key))->allocated++;
+  ((mod_log_w_set_t *)stm_get_specific(mod_log_key))->allocated++;
 }
 
 /*
  * Called upon thread creation.
  */
-static void mod_log_on_thread_init(TXPARAMS void *arg)
+static void mod_log_on_thread_init(void *arg)
 {
   mod_log_w_set_t *ws;
 
@@ -301,17 +304,17 @@ static void mod_log_on_thread_init(TXPARAMS void *arg)
   ws->entries = NULL;
   ws->nb_entries = ws->size = ws->allocated = 0;
 
-  stm_set_specific(TXARGS mod_log_key, ws);
+  stm_set_specific(mod_log_key, ws);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void mod_log_on_thread_exit(TXPARAMS void *arg)
+static void mod_log_on_thread_exit(void *arg)
 {
   mod_log_w_set_t *ws;
 
-  ws = (mod_log_w_set_t *)stm_get_specific(TXARGS mod_log_key);
+  ws = (mod_log_w_set_t *)stm_get_specific(mod_log_key);
   assert(ws != NULL);
 
   free(ws->entries);
@@ -321,12 +324,12 @@ static void mod_log_on_thread_exit(TXPARAMS void *arg)
 /*
  * Called upon transaction commit.
  */
-static void mod_log_on_commit(TXPARAMS void *arg)
+static void mod_log_on_commit(void *arg)
 {
   mod_log_w_set_t *ws;
   mod_log_w_entry_t *w;
 
-  ws = (mod_log_w_set_t *)stm_get_specific(TXARGS mod_log_key);
+  ws = (mod_log_w_set_t *)stm_get_specific(mod_log_key);
   assert(ws != NULL);
 
   /* Free memory */
@@ -348,12 +351,12 @@ static void mod_log_on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void mod_log_on_abort(TXPARAMS void *arg)
+static void mod_log_on_abort(void *arg)
 {
   mod_log_w_set_t *ws;
   mod_log_w_entry_t *w;
 
-  ws = (mod_log_w_set_t *)stm_get_specific(TXARGS mod_log_key);
+  ws = (mod_log_w_set_t *)stm_get_specific(mod_log_key);
   assert(ws != NULL);
 
   if (ws->nb_entries > 0) {
@@ -429,7 +432,7 @@ static void mod_log_on_abort(TXPARAMS void *arg)
 /*
  * Initialize module.
  */
-void mod_log_init()
+void mod_log_init(void)
 {
   if (mod_log_initialized)
     return;

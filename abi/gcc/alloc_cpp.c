@@ -7,7 +7,7 @@
  * Description:
  *   Module for C++ dynamic memory management.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -67,7 +70,7 @@ extern void _ZdaPv (void *) __attribute__((weak));
 extern void _ZdlPvRKSt9nothrow_t (void *, c_nothrow_p) __attribute__((weak));
 extern void _ZdaPvRKSt9nothrow_t (void *, c_nothrow_p) __attribute__((weak));
 
-static void mod_alloc_record(TXPARAMS void *ptr, void (*rev_func)(void*))
+static void mod_alloc_record(void *ptr, void (*rev_func)(void*))
 {
   /* Memory will be freed upon abort */
   mod_alloc_info_t *mi;
@@ -78,7 +81,7 @@ static void mod_alloc_record(TXPARAMS void *ptr, void (*rev_func)(void*))
     exit(1);
   }
 
-  mi = (mod_alloc_info_t *)stm_get_specific(TXARGS mod_alloc_key);
+  mi = (mod_alloc_info_t *)stm_get_specific(mod_alloc_key);
   assert(mi != NULL);
 
   if ((mb = (mod_alloc_block_t *)malloc(sizeof(mod_alloc_block_t))) == NULL) {
@@ -91,7 +94,7 @@ static void mod_alloc_record(TXPARAMS void *ptr, void (*rev_func)(void*))
   mi->allocated = mb;
 }
 
-static void mod_free_record(TXPARAMS void *addr, void (*rev_func)(void*))
+static void mod_free_record(void *addr, void (*rev_func)(void*))
 {
   /* Memory disposal is delayed until commit */
   mod_alloc_info_t *mi;
@@ -102,13 +105,13 @@ static void mod_free_record(TXPARAMS void *addr, void (*rev_func)(void*))
     exit(1);
   }
 
-  mi = (mod_alloc_info_t *)stm_get_specific(TXARGS mod_alloc_key);
+  mi = (mod_alloc_info_t *)stm_get_specific(mod_alloc_key);
   assert(mi != NULL);
 
   /* Overwrite to prevent inconsistent reads */
   /* TODO delete operators doesn't give the allocated size */
   /* Acquire lock and update version number */
-  stm_store2(TXARGS addr, 0, 0);
+  stm_store2(addr, 0, 0);
   /* Schedule for removal */
   if ((mb = (mod_alloc_block_t *)malloc(sizeof(mod_alloc_block_t))) == NULL) {
     perror("malloc");
@@ -123,7 +126,7 @@ static void mod_free_record(TXPARAMS void *addr, void (*rev_func)(void*))
 /*
  * Called upon thread creation.
  */
-static void mod_alloc_on_thread_init(TXPARAMS void *arg)
+static void mod_alloc_on_thread_init(void *arg)
 {
   mod_alloc_info_t *mi;
 
@@ -133,26 +136,26 @@ static void mod_alloc_on_thread_init(TXPARAMS void *arg)
   }
   mi->allocated = mi->freed = NULL;
 
-  stm_set_specific(TXARGS mod_alloc_key, mi);
+  stm_set_specific(mod_alloc_key, mi);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void mod_alloc_on_thread_exit(TXPARAMS void *arg)
+static void mod_alloc_on_thread_exit(void *arg)
 {
-  free(stm_get_specific(TXARGS mod_alloc_key));
+  free(stm_get_specific(mod_alloc_key));
 }
 
 /*
  * Called upon transaction commit.
  */
-static void mod_alloc_on_commit(TXPARAMS void *arg)
+static void mod_alloc_on_commit(void *arg)
 {
   mod_alloc_info_t *mi;
   mod_alloc_block_t *mb, *next;
 
-  mi = (mod_alloc_info_t *)stm_get_specific(TXARGS mod_alloc_key);
+  mi = (mod_alloc_info_t *)stm_get_specific(mod_alloc_key);
   assert(mi != NULL);
 
   /* Keep memory allocated during transaction */
@@ -182,12 +185,12 @@ static void mod_alloc_on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void mod_alloc_on_abort(TXPARAMS void *arg)
+static void mod_alloc_on_abort(void *arg)
 {
   mod_alloc_info_t *mi;
   mod_alloc_block_t *mb, *next;
 
-  mi = (mod_alloc_info_t *)stm_get_specific(TXARGS mod_alloc_key);
+  mi = (mod_alloc_info_t *)stm_get_specific(mod_alloc_key);
   assert (mi != NULL);
 
   /* Dispose of memory allocated during transaction */
@@ -219,13 +222,6 @@ static void mod_alloc_on_abort(TXPARAMS void *arg)
 void *CREATENAME(_ZGTtnw,) (size_t sz)
 {
   void *alloc;
-#ifdef HYDRID_ASF
-  /* ASF can abort anywhere => libc malloc is not safe for this */
-  if (stm_hybrid()) {
-    stm_set_software();
-    /* Unreachable point */
-  }
-#endif /* HYBRID_ASF */
   alloc = CREATENAME(_Znw,)(sz);
   mod_alloc_record(alloc, _ZdlPv);
   return alloc;
@@ -234,13 +230,6 @@ void *CREATENAME(_ZGTtnw,) (size_t sz)
 void *CREATENAME(_ZGTtna,) (size_t sz)
 {
   void *alloc;
-#ifdef HYDRID_ASF
-  /* ASF can abort anywhere => libc malloc is not safe for this */
-  if (stm_hybrid()) {
-    stm_set_software();
-    /* Unreachable point */
-  }
-#endif /* HYBRID_ASF */
   alloc = CREATENAME(_Zna,)(sz);
   mod_alloc_record(alloc, _ZdaPv);
   return alloc;
@@ -254,13 +243,6 @@ static void _ZdlPvRKSt9nothrow_t1(void *ptr)
 void *CREATENAME(_ZGTtnw,RKSt9nothrow_t) (size_t sz, c_nothrow_p nt)
 {
   void *alloc;
-#ifdef HYDRID_ASF
-  /* ASF can abort anywhere => libc malloc is not safe for this */
-  if (stm_hybrid()) {
-    stm_set_software();
-    /* Unreachable point */
-  }
-#endif /* HYBRID_ASF */
   alloc = CREATENAME(_Znw,RKSt9nothrow_t)(sz, nt);
   mod_alloc_record(alloc, _ZdlPvRKSt9nothrow_t1);
   return alloc;
@@ -274,13 +256,6 @@ static void _ZdaPvRKSt9nothrow_t1(void *ptr)
 void *CREATENAME(_ZGTtna,RKSt9nothrow_t)(size_t sz, c_nothrow_p nt)
 {
   void *alloc;
-#ifdef HYDRID_ASF
-  /* ASF can abort anywhere => libc malloc is not safe for this */
-  if (stm_hybrid()) {
-    stm_set_software();
-    /* Unreachable point */
-  }
-#endif /* HYBRID_ASF */
   alloc = CREATENAME(_Zna,RKSt9nothrow_t)(sz, nt);
   mod_alloc_record(alloc, _ZdaPvRKSt9nothrow_t1);
   return alloc;

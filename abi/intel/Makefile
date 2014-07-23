@@ -12,10 +12,10 @@ include $(ROOT)/abi/Makefile.common
 ##############################################################################
 ## INTEL
 ##############################################################################
-CFLAGS += -DTM_INTEL -DEXPLICIT_TX_PARAMETER
+CPPFLAGS += -DTM_INTEL -I.
 
 # NOTES
-#   Intel STM Compiler uses EXPLICIT_TX_PARAMETER
+#   Intel STM Compiler uses explicit transaction descriptor
 #   Two ways to use:
 #   - Compile STM application using libitm.a
 #   - Compile STM application using Intel STM and change LD_LIBRARY_PATH to use tiny's libitmdyn.so
@@ -25,27 +25,27 @@ CFLAGS += -DTM_INTEL -DEXPLICIT_TX_PARAMETER
 intel: 	libitm.a
 
 %.do: 	../%.c 
-	$(CC) -fPIC $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 %.o: 	../%.c 
-	$(CC) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 # TODO the dependency of arch_x86.S is not set
-arch.o: 	../arch.S
-	$(CC) $(CFLAGS) -c -o $@ $<
+arch.o: 	arch.S
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-libitm.a: 	abi.o arch.o 
+libitm.a: 	abi.o arch.o alloc.o 
 	$(AR) cru $@ $^
 
 # TODO check the dynamic version (not really needed)
-arch.do: 	../arch.S
-	$(CC) -fPIC $(CFLAGS) -c -o $@ $<
+arch.do: 	arch.S
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 abi_dyn.o:	abi.c
-	$(CC) -fPIC $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 libitmdyn.so: 	abi_dyn.o arch.do
-	$(CC) -fPIC $(CFLAGS) -shared -Wl,--version-script,../lib.map -o $@ $^ 
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) -shared -Wl,--version-script,../lib.map -o $@ $^ 
 ##############################################################################
 
 TESTCC          ?= icc

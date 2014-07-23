@@ -9,7 +9,7 @@ BINS = types irrevocability
 all:	$(BINS)
 
 %.o:	%.c
-	$(CC) $(CFLAGS) $(DEFINES) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEFINES) -c -o $@ $<
 
 $(BINS):	%:	%.o $(TMLIB)
 	$(CC) -o $@ $< $(LDFLAGS)

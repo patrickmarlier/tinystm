@@ -7,7 +7,7 @@
  * Description:
  *   Module for gathering global statistics about transactions.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -81,7 +84,7 @@ int stm_get_global_stats(const char *name, void *val)
 /*
  * Return statistics about current thread.
  */
-int stm_get_local_stats(TXPARAMS const char *name, void *val)
+int stm_get_local_stats(const char *name, void *val)
 {
   mod_stats_data_t *stats;
 
@@ -90,7 +93,7 @@ int stm_get_local_stats(TXPARAMS const char *name, void *val)
     exit(1);
   }
 
-  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
+  stats = (mod_stats_data_t *)stm_get_specific(mod_stats_key);
   assert(stats != NULL);
 
   if (strcmp("nb_commits", name) == 0) {
@@ -120,7 +123,7 @@ int stm_get_local_stats(TXPARAMS const char *name, void *val)
 /*
  * Called upon thread creation.
  */
-static void mod_stats_on_thread_init(TXPARAMS void *arg)
+static void mod_stats_on_thread_init(void *arg)
 {
   mod_stats_data_t *stats;
 
@@ -135,18 +138,18 @@ static void mod_stats_on_thread_init(TXPARAMS void *arg)
   stats->retries_min = ULONG_MAX;
   stats->retries_max = 0;
 
-  stm_set_specific(TXARGS mod_stats_key, stats);
+  stm_set_specific(mod_stats_key, stats);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void mod_stats_on_thread_exit(TXPARAMS void *arg)
+static void mod_stats_on_thread_exit(void *arg)
 {
   mod_stats_data_t *stats;
   unsigned long max, min;
 
-  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
+  stats = (mod_stats_data_t *)stm_get_specific(mod_stats_key);
   assert(stats != NULL);
 
   ATOMIC_FETCH_ADD_FULL(&mod_stats_global.commits, stats->commits);
@@ -171,11 +174,11 @@ retry_min:
 /*
  * Called upon transaction commit.
  */
-static void mod_stats_on_commit(TXPARAMS void *arg)
+static void mod_stats_on_commit(void *arg)
 {
   mod_stats_data_t *stats;
 
-  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
+  stats = (mod_stats_data_t *)stm_get_specific(mod_stats_key);
   assert(stats != NULL);
   stats->commits++;
   stats->retries_acc += stats->retries;
@@ -190,11 +193,11 @@ static void mod_stats_on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void mod_stats_on_abort(TXPARAMS void *arg)
+static void mod_stats_on_abort(void *arg)
 {
   mod_stats_data_t *stats;
 
-  stats = (mod_stats_data_t *)stm_get_specific(TXARGS mod_stats_key);
+  stats = (mod_stats_data_t *)stm_get_specific(mod_stats_key);
   assert(stats != NULL);
 
   stats->retries++;
@@ -203,7 +206,7 @@ static void mod_stats_on_abort(TXPARAMS void *arg)
 /*
  * Initialize module.
  */
-void mod_stats_init()
+void mod_stats_init(void)
 {
   if (mod_stats_initialized)
     return;

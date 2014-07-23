@@ -3,10 +3,11 @@
  *   tanger.c
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
+ *   Patrick Marlier <patrick.marlier@unine.ch>
  * Description:
  *   Tanger adapter for tinySTM.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -17,12 +18,15 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /* This file is designed to work with DTMC (Tanger/LLVM).
  * DTMC is not 100% compatible with Intel ABI yet thus this file 
  * permits to propose a workaround.
- * */
+ */
 
 #define _GNU_SOURCE
 #include <assert.h>
@@ -39,13 +43,8 @@
 # define TANGER_LOADSTORE_ATTR __attribute__((nothrow,noinline))
 #endif /* TANGER_LOADSTORE_ATTR */
 
-#ifdef HYBRID_ASF
-# define TM_LOAD    tm_load
-# define TM_STORE   tm_store
-#else /* !HYBRID_ASF */
-# define TM_LOAD    stm_load
-# define TM_STORE   stm_store
-#endif /* !HYBRID_ASF */
+#define TM_LOAD    stm_load
+#define TM_STORE   stm_store
 
 /* TODO manage properly TLS but llvm-gcc should do */
 __thread appstack_t appstack;
@@ -316,6 +315,7 @@ tanger_stm_tx_t *tanger_stm_get_tx()
 
 
 /* TODO manage nesting */
+void tanger_stm_save_restore_stack(void* low_addr, void* high_addr) __attribute__((noinline));
 void tanger_stm_save_restore_stack(void* low_addr, void* high_addr)
 {
   /* Saving stack info and backup the stack in beginTransaction because LLVM

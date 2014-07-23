@@ -7,7 +7,7 @@
  * Description:
  *   Atomic operations.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #ifndef _ATOMIC_H_
@@ -25,13 +28,19 @@
 
 # ifdef ATOMIC_BUILTIN
 typedef volatile size_t atomic_t;
+#  ifdef __INTEL_COMPILER
+#   define ATOMIC_CB                     __memory_barrier()
+#  else /* ! __INTEL_COMPILER, assuming __GNUC__ */
+#   define ATOMIC_CB                     __asm__ __volatile__("": : :"memory")
+#  endif /* ! __INTEL_COMPILER */
 #  ifndef UNSAFE
 #   warning "This is experimental and shouldn't be used"
-/* 
-   Note: __sync_ is available for GCC 4.2+ and ICC 11.1+ 
+/*
+   Note: __sync_ is available for GCC 4.2+ and ICC 11.1+
    But these definitions are not 100% safe:
     * need 'a' to be volatile
     * no fence for read/store proposed (only full fence)
+   C11 and C++11 also propose atomic operations.
 */
 #   define ATOMIC_CAS_FULL(a, e, v)      (__sync_bool_compare_and_swap(a, e, v))
 #   define ATOMIC_FETCH_INC_FULL(a)      (__sync_fetch_and_add(a, 1))
@@ -60,10 +69,11 @@ typedef volatile size_t atomic_t;
 #  endif /* UNSAFE */
 
 # else /* ! ATOMIC_BUILTIN */
-/* NOTE: enable fence instructions for i386 and amd64 */
-#define AO_USE_PENTIUM4_INSTRS
-# include <atomic_ops.h>
+/* NOTE: enable fence instructions for i386 and amd64 but the mfence instructions seems costly. */
+/* # define AO_USE_PENTIUM4_INSTRS */
+#  include <atomic_ops.h>
 typedef AO_t atomic_t;
+#  define ATOMIC_CB                     AO_compiler_barrier()
 #  define ATOMIC_CAS_FULL(a, e, v)      (AO_compare_and_swap_full((volatile AO_t *)(a), (AO_t)(e), (AO_t)(v)))
 #  define ATOMIC_FETCH_INC_FULL(a)      (AO_fetch_and_add1_full((volatile AO_t *)(a)))
 #  define ATOMIC_FETCH_DEC_FULL(a)      (AO_fetch_and_sub1_full((volatile AO_t *)(a)))

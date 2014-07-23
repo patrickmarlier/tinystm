@@ -7,7 +7,7 @@
  * Description:
  *   STM wrapper functions for different data types.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /**
@@ -29,7 +32,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2011
+ *   2007-2012
  */
 
 #ifndef _WRAPPERS_H_
@@ -43,10 +46,6 @@
 extern "C" {
 # endif
 
-# ifndef FUNC_ATTR
-#  define FUNC_ATTR(STR)                STR
-# endif /* ! FUNC_ATTR */
-
 /**
  * Transactional load of an unsigned 8-bit value.
  *
@@ -55,7 +54,7 @@ extern "C" {
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(uint8_t stm_load_u8(TXPARAMS volatile uint8_t *addr));
+uint8_t stm_load_u8(volatile uint8_t *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned 16-bit value.
@@ -65,7 +64,7 @@ FUNC_ATTR(uint8_t stm_load_u8(TXPARAMS volatile uint8_t *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(uint16_t stm_load_u16(TXPARAMS volatile uint16_t *addr));
+uint16_t stm_load_u16(volatile uint16_t *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned 32-bit value.
@@ -75,7 +74,7 @@ FUNC_ATTR(uint16_t stm_load_u16(TXPARAMS volatile uint16_t *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(uint32_t stm_load_u32(TXPARAMS volatile uint32_t *addr));
+uint32_t stm_load_u32(volatile uint32_t *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned 64-bit value.
@@ -85,7 +84,7 @@ FUNC_ATTR(uint32_t stm_load_u32(TXPARAMS volatile uint32_t *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(uint64_t stm_load_u64(TXPARAMS volatile uint64_t *addr));
+uint64_t stm_load_u64(volatile uint64_t *addr) _CALLCONV;
 
 /**
  * Transactional load of a char value.
@@ -95,7 +94,7 @@ FUNC_ATTR(uint64_t stm_load_u64(TXPARAMS volatile uint64_t *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(char stm_load_char(TXPARAMS volatile char *addr));
+char stm_load_char(volatile char *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned char value.
@@ -105,7 +104,7 @@ FUNC_ATTR(char stm_load_char(TXPARAMS volatile char *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(unsigned char stm_load_uchar(TXPARAMS volatile unsigned char *addr));
+unsigned char stm_load_uchar(volatile unsigned char *addr) _CALLCONV;
 
 /**
  * Transactional load of a short value.
@@ -115,7 +114,7 @@ FUNC_ATTR(unsigned char stm_load_uchar(TXPARAMS volatile unsigned char *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(short stm_load_short(TXPARAMS volatile short *addr));
+short stm_load_short(volatile short *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned short value.
@@ -125,7 +124,7 @@ FUNC_ATTR(short stm_load_short(TXPARAMS volatile short *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(unsigned short stm_load_ushort(TXPARAMS volatile unsigned short *addr));
+unsigned short stm_load_ushort(volatile unsigned short *addr) _CALLCONV;
 
 /**
  * Transactional load of an int value.
@@ -135,7 +134,7 @@ FUNC_ATTR(unsigned short stm_load_ushort(TXPARAMS volatile unsigned short *addr)
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(int stm_load_int(TXPARAMS volatile int *addr));
+int stm_load_int(volatile int *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned int value.
@@ -145,7 +144,7 @@ FUNC_ATTR(int stm_load_int(TXPARAMS volatile int *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(unsigned int stm_load_uint(TXPARAMS volatile unsigned int *addr));
+unsigned int stm_load_uint(volatile unsigned int *addr) _CALLCONV;
 
 /**
  * Transactional load of a long value.
@@ -155,7 +154,7 @@ FUNC_ATTR(unsigned int stm_load_uint(TXPARAMS volatile unsigned int *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(long stm_load_long(TXPARAMS volatile long *addr));
+long stm_load_long(volatile long *addr) _CALLCONV;
 
 /**
  * Transactional load of an unsigned long value.
@@ -165,7 +164,7 @@ FUNC_ATTR(long stm_load_long(TXPARAMS volatile long *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(unsigned long stm_load_ulong(TXPARAMS volatile unsigned long *addr));
+unsigned long stm_load_ulong(volatile unsigned long *addr) _CALLCONV;
 
 /**
  * Transactional load of a float value.
@@ -175,7 +174,7 @@ FUNC_ATTR(unsigned long stm_load_ulong(TXPARAMS volatile unsigned long *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(float stm_load_float(TXPARAMS volatile float *addr));
+float stm_load_float(volatile float *addr) _CALLCONV;
 
 /**
  * Transactional load of a double value.
@@ -185,7 +184,7 @@ FUNC_ATTR(float stm_load_float(TXPARAMS volatile float *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(double stm_load_double(TXPARAMS volatile double *addr));
+double stm_load_double(volatile double *addr) _CALLCONV;
 
 /**
  * Transactional load of a pointer value.
@@ -195,7 +194,7 @@ FUNC_ATTR(double stm_load_double(TXPARAMS volatile double *addr));
  * @return
  *   Value read from the specified address.
  */
-FUNC_ATTR(void *stm_load_ptr(TXPARAMS volatile void **addr));
+void *stm_load_ptr(volatile void **addr) _CALLCONV;
 
 /**
  * Transactional load of a memory region.  The address of the region
@@ -210,7 +209,7 @@ FUNC_ATTR(void *stm_load_ptr(TXPARAMS volatile void **addr));
  * @param size
  *   Number of bytes to read.
  */
-FUNC_ATTR(void stm_load_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size));
+void stm_load_bytes(volatile uint8_t *addr, uint8_t *buf, size_t size) _CALLCONV;
 
 /**
  * Transactional store of an unsigned 8-bit value.
@@ -220,7 +219,7 @@ FUNC_ATTR(void stm_load_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, siz
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_u8(TXPARAMS volatile uint8_t *addr, uint8_t value));
+void stm_store_u8(volatile uint8_t *addr, uint8_t value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned 16-bit value.
@@ -230,7 +229,7 @@ FUNC_ATTR(void stm_store_u8(TXPARAMS volatile uint8_t *addr, uint8_t value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_u16(TXPARAMS volatile uint16_t *addr, uint16_t value));
+void stm_store_u16(volatile uint16_t *addr, uint16_t value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned 32-bit value.
@@ -240,7 +239,7 @@ FUNC_ATTR(void stm_store_u16(TXPARAMS volatile uint16_t *addr, uint16_t value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_u32(TXPARAMS volatile uint32_t *addr, uint32_t value));
+void stm_store_u32(volatile uint32_t *addr, uint32_t value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned 64-bit value.
@@ -250,7 +249,7 @@ FUNC_ATTR(void stm_store_u32(TXPARAMS volatile uint32_t *addr, uint32_t value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_u64(TXPARAMS volatile uint64_t *addr, uint64_t value));
+void stm_store_u64(volatile uint64_t *addr, uint64_t value) _CALLCONV;
 
 /**
  * Transactional store of a char value.
@@ -260,7 +259,7 @@ FUNC_ATTR(void stm_store_u64(TXPARAMS volatile uint64_t *addr, uint64_t value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_char(TXPARAMS volatile char *addr, char value));
+void stm_store_char(volatile char *addr, char value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned char value.
@@ -270,7 +269,7 @@ FUNC_ATTR(void stm_store_char(TXPARAMS volatile char *addr, char value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_uchar(TXPARAMS volatile unsigned char *addr, unsigned char value));
+void stm_store_uchar(volatile unsigned char *addr, unsigned char value) _CALLCONV;
 
 /**
  * Transactional store of a short value.
@@ -280,7 +279,7 @@ FUNC_ATTR(void stm_store_uchar(TXPARAMS volatile unsigned char *addr, unsigned c
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_short(TXPARAMS volatile short *addr, short value));
+void stm_store_short(volatile short *addr, short value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned short value.
@@ -290,7 +289,7 @@ FUNC_ATTR(void stm_store_short(TXPARAMS volatile short *addr, short value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_ushort(TXPARAMS volatile unsigned short *addr, unsigned short value));
+void stm_store_ushort(volatile unsigned short *addr, unsigned short value) _CALLCONV;
 
 /**
  * Transactional store of an int value.
@@ -300,7 +299,7 @@ FUNC_ATTR(void stm_store_ushort(TXPARAMS volatile unsigned short *addr, unsigned
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_int(TXPARAMS volatile int *addr, int value));
+void stm_store_int(volatile int *addr, int value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned int value.
@@ -310,7 +309,7 @@ FUNC_ATTR(void stm_store_int(TXPARAMS volatile int *addr, int value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_uint(TXPARAMS volatile unsigned int *addr, unsigned int value));
+void stm_store_uint(volatile unsigned int *addr, unsigned int value) _CALLCONV;
 
 /**
  * Transactional store of a long value.
@@ -320,7 +319,7 @@ FUNC_ATTR(void stm_store_uint(TXPARAMS volatile unsigned int *addr, unsigned int
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_long(TXPARAMS volatile long *addr, long value));
+void stm_store_long(volatile long *addr, long value) _CALLCONV;
 
 /**
  * Transactional store of an unsigned long value.
@@ -330,7 +329,7 @@ FUNC_ATTR(void stm_store_long(TXPARAMS volatile long *addr, long value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_ulong(TXPARAMS volatile unsigned long *addr, unsigned long value));
+void stm_store_ulong(volatile unsigned long *addr, unsigned long value) _CALLCONV;
 
 /**
  * Transactional store of a float value.
@@ -340,7 +339,7 @@ FUNC_ATTR(void stm_store_ulong(TXPARAMS volatile unsigned long *addr, unsigned l
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_float(TXPARAMS volatile float *addr, float value));
+void stm_store_float(volatile float *addr, float value) _CALLCONV;
 
 /**
  * Transactional store of a double value.
@@ -350,7 +349,7 @@ FUNC_ATTR(void stm_store_float(TXPARAMS volatile float *addr, float value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_double(TXPARAMS volatile double *addr, double value));
+void stm_store_double(volatile double *addr, double value) _CALLCONV;
 
 /**
  * Transactional store of a pointer value.
@@ -360,7 +359,7 @@ FUNC_ATTR(void stm_store_double(TXPARAMS volatile double *addr, double value));
  * @param value
  *   Value to be written.
  */
-FUNC_ATTR(void stm_store_ptr(TXPARAMS volatile void **addr, void *value));
+void stm_store_ptr(volatile void **addr, void *value) _CALLCONV;
 
 /**
  * Transactional store of a memory region.  The address of the region
@@ -374,7 +373,7 @@ FUNC_ATTR(void stm_store_ptr(TXPARAMS volatile void **addr, void *value));
  * @param size
  *   Number of bytes to write.
  */
-FUNC_ATTR(void stm_store_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, size_t size));
+void stm_store_bytes(volatile uint8_t *addr, uint8_t *buf, size_t size) _CALLCONV;
 
 /**
  * Transactional write of a byte to a memory region.  The address of the
@@ -389,7 +388,7 @@ FUNC_ATTR(void stm_store_bytes(TXPARAMS volatile uint8_t *addr, uint8_t *buf, si
  * @param count
  *   Number of bytes to write.
  */
-FUNC_ATTR(void stm_set_bytes(TXPARAMS volatile uint8_t *addr, uint8_t byte, size_t count));
+void stm_set_bytes(volatile uint8_t *addr, uint8_t byte, size_t count) _CALLCONV;
 
 # ifdef __cplusplus
 }

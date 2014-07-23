@@ -45,3 +45,27 @@ check-all:
 	$(MAKE) -C dtmc check
 	$(MAKE) -C intel check
 
+gcc/libitm.h: libitm.h.tpl.header libitm.h.tpl.unifdef libitm.h.tpl.cpp libitm.h.tpl.footer
+	cat libitm.h.tpl.header > $@
+	unifdef -DTM_GCC -UTM_INTEL -UTM_DTMC libitm.h.tpl.unifdef >> $@ || true
+	cat libitm.h.tpl.cpp >> $@
+	cat libitm.h.tpl.footer >> $@
+	sed -i 's/TX_ARGS //g' $@
+	sed -i 's/TX_ARG//g' $@
+
+dtmc/libitm.h: libitm.h.tpl.header libitm.h.tpl.unifdef libitm.h.tpl.cpp libitm.h.tpl.footer
+	cat libitm.h.tpl.header > $@
+	unifdef -UTM_GCC -UTM_INTEL -DTM_DTMC libitm.h.tpl.unifdef >> $@ || true
+	cat libitm.h.tpl.cpp >> $@
+	cat libitm.h.tpl.footer >> $@
+	sed -i 's/TX_ARGS//g' $@
+	sed -i 's/TX_ARG//g' $@
+
+intel/libitm.h: libitm.h.tpl.header libitm.h.tpl.unifdef libitm.h.tpl.cpp libitm.h.tpl.footer
+	cat libitm.h.tpl.header > $@
+	unifdef -UTM_GCC -DTM_INTEL -UTM_DTMC libitm.h.tpl.unifdef >> $@ || true
+	cat libitm.h.tpl.cpp >> $@
+	cat libitm.h.tpl.footer >> $@
+	sed -i 's/TX_ARGS/_ITM_transaction *,/g' $@
+	sed -i 's/TX_ARG/_ITM_transaction */g' $@
+

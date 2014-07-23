@@ -7,7 +7,7 @@
  * Description:
  *   Module to test callbacks.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include "mod_print.h"
@@ -27,7 +30,7 @@
 /*
  * Called upon thread creation.
  */
-static void mod_print_on_thread_init(TXPARAMS void *arg)
+static void mod_print_on_thread_init(void *arg)
 {
   printf("==> on_thread_init()\n");
   fflush(NULL);
@@ -36,7 +39,7 @@ static void mod_print_on_thread_init(TXPARAMS void *arg)
 /*
  * Called upon thread deletion.
  */
-static void mod_print_on_thread_exit(TXPARAMS void *arg)
+static void mod_print_on_thread_exit(void *arg)
 {
   printf("==> on_thread_exit()\n");
   fflush(NULL);
@@ -45,7 +48,7 @@ static void mod_print_on_thread_exit(TXPARAMS void *arg)
 /*
  * Called upon transaction start.
  */
-static void mod_print_on_start(TXPARAMS void *arg)
+static void mod_print_on_start(void *arg)
 {
   printf("==> on_start()\n");
   fflush(NULL);
@@ -54,7 +57,7 @@ static void mod_print_on_start(TXPARAMS void *arg)
 /*
  * Called before transaction try to commit.
  */
-static void mod_print_on_precommit(TXPARAMS void *arg)
+static void mod_print_on_precommit(void *arg)
 {
   printf("==> on_precommit()\n");
   fflush(NULL);
@@ -63,7 +66,7 @@ static void mod_print_on_precommit(TXPARAMS void *arg)
 /*
  * Called upon transaction commit.
  */
-static void mod_print_on_commit(TXPARAMS void *arg)
+static void mod_print_on_commit(void *arg)
 {
   printf("==> on_commit()\n");
   fflush(NULL);
@@ -72,7 +75,7 @@ static void mod_print_on_commit(TXPARAMS void *arg)
 /*
  * Called upon transaction abort.
  */
-static void mod_print_on_abort(TXPARAMS void *arg)
+static void mod_print_on_abort(void *arg)
 {
   printf("==> on_abort()\n");
   fflush(NULL);
@@ -81,7 +84,7 @@ static void mod_print_on_abort(TXPARAMS void *arg)
 /*
  * Initialize module.
  */
-void mod_print_init()
+void mod_print_init(void)
 {
   stm_register(mod_print_on_thread_init, mod_print_on_thread_exit, mod_print_on_start, mod_print_on_precommit, mod_print_on_commit, mod_print_on_abort, NULL);
 }

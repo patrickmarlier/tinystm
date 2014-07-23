@@ -7,7 +7,7 @@
  * Description:
  *   Module for gathering statistics about transactions.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /**
@@ -32,7 +35,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2011
+ *   2007-2012
  */
 
 #ifndef _MOD_STATS_H_
@@ -70,14 +73,14 @@ int stm_get_global_stats(const char *name, void *val);
  * @return
  *   1 upon success, 0 otherwise.
  */
-int stm_get_local_stats(TXPARAMS const char *name, void *val);
+int stm_get_local_stats(const char *name, void *val);
 
 /**
  * Initialize the module.  This function must be called once, from the
  * main thread, after initializing the STM library and before
  * performing any transactional operation.
  */
-void mod_stats_init();
+void mod_stats_init(void);
 
 # ifdef __cplusplus
 }

@@ -1,11 +1,31 @@
-/* This file is inspired by the work of Richard Henderson on the 
- * GNU Transactional Memory Library (libitm).
- */
+/* Copyright (C) 2009, 2010, 2011 Free Software Foundation, Inc.
+   Contributed by Richard Henderson <rth@redhat.com>.
+
+   This file is part of the GNU Transactional Memory Library (libitm).
+
+   Libitm is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 3 of the License, or
+   (at your option) any later version.
+
+   Libitm is distributed in the hope that it will be useful, but WITHOUT ANY
+   WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+   FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+   more details.
+
+   Under Section 7 of GPL version 3, you are granted additional
+   permissions described in the GCC Runtime Library Exception, version
+   3.1, as published by the Free Software Foundation.
+
+   You should have received a copy of the GNU General Public License and
+   a copy of the GCC Runtime Library Exception along with this program;
+   see the files COPYING3 and COPYING.RUNTIME respectively.  If not, see
+   <http://www.gnu.org/licenses/>.
+
+   This file was modified to allow compatibility with the GNU Transactional
+   Memory Library (libitm). */
 
 /* No include needed since the file is included */
-
-/* FIXME implement a read/write lock for tables */
-//static gtm_rwlock table_lock;
 
 struct clone_entry
 {
@@ -25,9 +45,6 @@ static void *
 find_clone (void *ptr)
 {
   struct clone_table *table;
-  void *ret = NULL;
-
-//  table_lock.read_lock ();
 
   for (table = all_tables; table ; table = table->next)
     {
@@ -48,8 +65,7 @@ find_clone (void *ptr)
 	    lo = i + 1;
 	  else
 	    {
-	      ret = t[i].clone;
-	      goto found;
+	      return t[i].clone;
 	    }
 	}
 
@@ -57,10 +73,7 @@ find_clone (void *ptr)
 	 this table then it doesn't exist.  */
       break;
     }
-
- found:
-//  table_lock.read_unlock ();
-  return ret;
+  return NULL;
 }
 
 
@@ -84,9 +97,11 @@ _ITM_getTMCloneOrIrrevocable (void *ptr)
 void * _ITM_CALL_CONVENTION
 _ITM_getTMCloneSafe (void *ptr)
 {
-  void *ret = find_clone (ptr);
-  if (ret == NULL)
-    abort ();
+  void *ret = find_clone(ptr);
+  if (ret == NULL) {
+    fprintf(stderr, "libitm: cannot find clone for %p\n", ptr);
+    abort();
+  }
   return ret;
 }
 
@@ -133,15 +148,13 @@ _ITM_deregisterTMCloneTable (void *xent)
   struct clone_table **pprev = &all_tables;
   struct clone_table *tab;
 
-//  table_lock.write_lock ();
+  /* FIXME: we must make sure that no transaction is active at this point. */
 
   for (pprev = &all_tables;
        tab = *pprev, tab->table != ent;
        pprev = &tab->next)
     continue;
   *pprev = tab->next;
-
-//  table_lock.write_unlock ();
 
   free (tab);
 }

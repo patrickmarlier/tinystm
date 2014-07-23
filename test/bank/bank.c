@@ -7,7 +7,7 @@
  * Description:
  *   Bank stress test.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #include <assert.h>
@@ -30,25 +33,53 @@
 #include <sys/time.h>
 #include <time.h>
 
-#include "stm.h"
-#include "mod_ab.h"
-
 #ifdef DEBUG
 # define IO_FLUSH                       fflush(NULL)
 /* Note: stdio is thread-safe */
 #endif
+
+#define RO                              1
+#define RW                              0
+
+#if defined(TM_GCC) 
+# include "../../abi/gcc/tm_macros.h"
+#elif defined(TM_DTMC) 
+# include "../../abi/dtmc/tm_macros.h"
+#elif defined(TM_INTEL)
+# include "../../abi/intel/tm_macros.h"
+#elif defined(TM_ABI)
+# include "../../abi/tm_macros.h"
+#endif /* defined(TM_ABI) */
+
+#if defined(TM_GCC) || defined(TM_DTMC) || defined(TM_INTEL) || defined(TM_ABI)
+# define TM_COMPILER
+/* Add some attributes to library function */
+TM_PURE 
+void exit(int status);
+TM_PURE 
+void perror(const char *s);
+#else /* Compile with explicit calls to tinySTM */
+
+#include "stm.h"
+#include "mod_ab.h"
 
 /*
  * Useful macros to work with transactions. Note that, to use nested
  * transactions, one should check the environment returned by
  * stm_get_env() and only call sigsetjmp() if it is not null.
  */
-#define RO                              1
-#define RW                              0
-#define START(id, ro)                   { stm_tx_attr_t _a = {id, ro}; sigjmp_buf *_e = stm_start(&_a); if (_e != NULL) sigsetjmp(*_e, 0)
-#define LOAD(addr)                      stm_load((stm_word_t *)addr)
-#define STORE(addr, value)              stm_store((stm_word_t *)addr, (stm_word_t)value)
-#define COMMIT                          stm_commit(); }
+
+#define TM_START(tid, ro)               { stm_tx_attr_t _a = {{.id = tid, .read_only = ro}}; sigjmp_buf *_e = stm_start(_a); if (_e != NULL) sigsetjmp(*_e, 0)
+#define TM_LOAD(addr)                   stm_load((stm_word_t *)addr)
+#define TM_STORE(addr, value)           stm_store((stm_word_t *)addr, (stm_word_t)value)
+#define TM_COMMIT                       stm_commit(); }
+
+#define TM_INIT                         stm_init(); mod_ab_init(0, NULL)
+#define TM_EXIT                         stm_exit()
+#define TM_INIT_THREAD                  stm_init_thread()
+#define TM_EXIT_THREAD                  stm_exit_thread()
+
+#endif /* Compile with explicit calls to tinySTM */
 
 #define DEFAULT_DURATION                10000
 #define DEFAULT_NB_ACCOUNTS             1024
@@ -67,7 +98,7 @@
  * GLOBALS
  * ################################################################### */
 
-static volatile atomic_t stop;
+static volatile int stop;
 
 /* ################################################################### *
  * BANK ACCOUNTS
@@ -83,24 +114,24 @@ typedef struct bank {
   int size;
 } bank_t;
 
-int transfer(account_t *src, account_t *dst, int amount)
+static int transfer(account_t *src, account_t *dst, int amount)
 {
   int i;
 
   /* Allow overdrafts */
-  START(0, RW);
-  i = (int)LOAD(&src->balance);
+  TM_START(0, RW);
+  i = (int)TM_LOAD(&src->balance);
   i -= amount;
-  STORE(&src->balance, i);
-  i = (int)LOAD(&dst->balance);
+  TM_STORE(&src->balance, i);
+  i = (int)TM_LOAD(&dst->balance);
   i += amount;
-  STORE(&dst->balance, i);
-  COMMIT;
+  TM_STORE(&dst->balance, i);
+  TM_COMMIT;
 
   return amount;
 }
 
-int total(bank_t *bank, int transactional)
+static int total(bank_t *bank, int transactional)
 {
   int i, total;
 
@@ -110,26 +141,26 @@ int total(bank_t *bank, int transactional)
       total += bank->accounts[i].balance;
     }
   } else {
-    START(1, RO);
+    TM_START(1, RO);
     total = 0;
     for (i = 0; i < bank->size; i++) {
-      total += (int)LOAD(&bank->accounts[i].balance);
+      total += (int)TM_LOAD(&bank->accounts[i].balance);
     }
-    COMMIT;
+    TM_COMMIT;
   }
 
   return total;
 }
 
-void reset(bank_t *bank)
+static void reset(bank_t *bank)
 {
   int i;
 
-  START(2, RW);
+  TM_START(2, RW);
   for (i = 0; i < bank->size; i++) {
-    STORE(&bank->accounts[i].balance, 0);
+    TM_STORE(&bank->accounts[i].balance, 0);
   }
-  COMMIT;
+  TM_COMMIT;
 }
 
 /* ################################################################### *
@@ -143,7 +174,7 @@ typedef struct barrier {
   int crossing;
 } barrier_t;
 
-void barrier_init(barrier_t *b, int n)
+static void barrier_init(barrier_t *b, int n)
 {
   pthread_cond_init(&b->complete, NULL);
   pthread_mutex_init(&b->mutex, NULL);
@@ -151,7 +182,7 @@ void barrier_init(barrier_t *b, int n)
   b->crossing = 0;
 }
 
-void barrier_cross(barrier_t *b)
+static void barrier_cross(barrier_t *b)
 {
   pthread_mutex_lock(&b->mutex);
   /* One more thread through */
@@ -177,6 +208,7 @@ typedef struct thread_data {
   unsigned long nb_transfer;
   unsigned long nb_read_all;
   unsigned long nb_write_all;
+#ifndef TM_COMPILER
   unsigned long nb_aborts;
   unsigned long nb_aborts_1;
   unsigned long nb_aborts_2;
@@ -190,6 +222,7 @@ typedef struct thread_data {
   unsigned long locked_reads_ok;
   unsigned long locked_reads_failed;
   unsigned long max_retries;
+#endif /* ! TM_COMPILER */
   unsigned int seed;
   int id;
   int read_all;
@@ -201,7 +234,7 @@ typedef struct thread_data {
   char padding[64];
 } thread_data_t;
 
-void *test(void *data)
+static void *test(void *data)
 {
   int src, dst, nb;
   int rand_max, rand_min;
@@ -227,7 +260,7 @@ void *test(void *data)
   }
 
   /* Create transaction */
-  stm_init_thread();
+  TM_INIT_THREAD;
   /* Wait on barrier */
   barrier_cross(d->barrier);
 
@@ -261,6 +294,7 @@ void *test(void *data)
       }
     }
   }
+#ifndef TM_COMPILER
   stm_get_stats("nb_aborts", &d->nb_aborts);
   stm_get_stats("nb_aborts_1", &d->nb_aborts_1);
   stm_get_stats("nb_aborts_2", &d->nb_aborts_2);
@@ -274,13 +308,14 @@ void *test(void *data)
   stm_get_stats("locked_reads_ok", &d->locked_reads_ok);
   stm_get_stats("locked_reads_failed", &d->locked_reads_failed);
   stm_get_stats("max_retries", &d->max_retries);
+#endif /* ! TM_COMPILER */
   /* Free transaction */
-  stm_exit_thread();
+  TM_EXIT_THREAD;
 
   return NULL;
 }
 
-void catcher(int sig)
+static void catcher(int sig)
 {
   static int nb = 0;
   printf("CAUGHT SIGNAL %d\n", sig);
@@ -307,14 +342,18 @@ int main(int argc, char **argv)
   };
 
   bank_t *bank;
-  int i, c;
+  int i, c, ret;
+  unsigned long reads, writes, updates;
+#ifndef TM_COMPILER
   char *s;
-  unsigned long reads, writes, updates, aborts, aborts_1, aborts_2,
+  unsigned long aborts, aborts_1, aborts_2,
     aborts_locked_read, aborts_locked_write,
     aborts_validate_read, aborts_validate_write, aborts_validate_commit,
     aborts_invalid_memory, aborts_killed,
     locked_reads_ok, locked_reads_failed, max_retries;
   stm_ab_stats_t ab_stats;
+  char *cm = NULL;
+#endif /* ! TM_COMPILER */
   thread_data_t *data;
   pthread_t *threads;
   pthread_attr_t attr;
@@ -330,7 +369,6 @@ int main(int argc, char **argv)
   int write_all = DEFAULT_WRITE_ALL;
   int write_threads = DEFAULT_WRITE_THREADS;
   int disjoint = DEFAULT_DISJOINT;
-  char *cm = NULL;
   sigset_t block_set;
 
   while(1) {
@@ -358,8 +396,10 @@ int main(int argc, char **argv)
               "        Print this message\n"
               "  -a, --accounts <int>\n"
               "        Number of accounts in the bank (default=" XSTR(DEFAULT_NB_ACCOUNTS) ")\n"
+#ifndef TM_COMPILER
               "  -c, --contention-manager <string>\n"
               "        Contention manager for resolving conflicts (default=suicide)\n"
+#endif /* ! TM_COMPILER */
               "  -d, --duration <int>\n"
               "        Test duration in milliseconds (0=infinite, default=" XSTR(DEFAULT_DURATION) ")\n"
               "  -n, --num-threads <int>\n"
@@ -379,9 +419,11 @@ int main(int argc, char **argv)
      case 'a':
        nb_accounts = atoi(optarg);
        break;
+#ifndef TM_COMPILER
      case 'c':
        cm = optarg;
        break;
+#endif /* ! TM_COMPILER */
      case 'd':
        duration = atoi(optarg);
        break;
@@ -421,7 +463,9 @@ int main(int argc, char **argv)
   assert(read_threads + write_threads <= nb_threads);
 
   printf("Nb accounts    : %d\n", nb_accounts);
+#ifndef TM_COMPILER
   printf("CM             : %s\n", (cm == NULL ? "DEFAULT" : cm));
+#endif /* ! TM_COMPILER */
   printf("Duration       : %d\n", duration);
   printf("Nb threads     : %d\n", nb_threads);
   printf("Read-all rate  : %d\n", read_all);
@@ -433,7 +477,7 @@ int main(int argc, char **argv)
          (int)sizeof(int),
          (int)sizeof(long),
          (int)sizeof(void *),
-         (int)sizeof(stm_word_t));
+         (int)sizeof(size_t));
 
   timeout.tv_sec = duration / 1000;
   timeout.tv_nsec = (duration % 1000) * 1000000;
@@ -464,9 +508,9 @@ int main(int argc, char **argv)
 
   /* Init STM */
   printf("Initializing STM\n");
-  stm_init();
-  mod_ab_init(0, NULL);
+  TM_INIT;
 
+#ifndef TM_COMPILER
   if (stm_get_parameter("compile_flags", &s))
     printf("STM flags      : %s\n", s);
 
@@ -474,6 +518,7 @@ int main(int argc, char **argv)
     if (stm_set_parameter("cm_policy", cm) == 0)
       printf("WARNING: cannot set contention manager \"%s\"\n", cm);
   }
+#endif /* ! TM_COMPILER */
 
   /* Access set from all threads */
   barrier_init(&barrier, nb_threads + 1);
@@ -491,6 +536,7 @@ int main(int argc, char **argv)
     data[i].nb_transfer = 0;
     data[i].nb_read_all = 0;
     data[i].nb_write_all = 0;
+#ifndef TM_COMPILER
     data[i].nb_aborts = 0;
     data[i].nb_aborts_1 = 0;
     data[i].nb_aborts_2 = 0;
@@ -504,6 +550,7 @@ int main(int argc, char **argv)
     data[i].locked_reads_ok = 0;
     data[i].locked_reads_failed = 0;
     data[i].max_retries = 0;
+#endif /* ! TM_COMPILER */
     data[i].seed = rand();
     data[i].bank = bank;
     data[i].barrier = &barrier;
@@ -533,7 +580,7 @@ int main(int argc, char **argv)
     sigemptyset(&block_set);
     sigsuspend(&block_set);
   }
-  ATOMIC_STORE(&stop, 1);
+  stop = 1;
   gettimeofday(&end, NULL);
   printf("STOPPING...\n");
 
@@ -546,6 +593,7 @@ int main(int argc, char **argv)
   }
 
   duration = (end.tv_sec * 1000 + end.tv_usec / 1000) - (start.tv_sec * 1000 + start.tv_usec / 1000);
+#ifndef TM_COMPILER
   aborts = 0;
   aborts_1 = 0;
   aborts_2 = 0;
@@ -558,15 +606,17 @@ int main(int argc, char **argv)
   aborts_killed = 0;
   locked_reads_ok = 0;
   locked_reads_failed = 0;
+  max_retries = 0;
+#endif /* ! TM_COMPILER */
   reads = 0;
   writes = 0;
   updates = 0;
-  max_retries = 0;
   for (i = 0; i < nb_threads; i++) {
     printf("Thread %d\n", i);
     printf("  #transfer   : %lu\n", data[i].nb_transfer);
     printf("  #read-all   : %lu\n", data[i].nb_read_all);
     printf("  #write-all  : %lu\n", data[i].nb_write_all);
+#ifndef TM_COMPILER
     printf("  #aborts     : %lu\n", data[i].nb_aborts);
     printf("    #lock-r   : %lu\n", data[i].nb_aborts_locked_read);
     printf("    #lock-w   : %lu\n", data[i].nb_aborts_locked_write);
@@ -592,18 +642,22 @@ int main(int argc, char **argv)
     aborts_killed += data[i].nb_aborts_killed;
     locked_reads_ok += data[i].locked_reads_ok;
     locked_reads_failed += data[i].locked_reads_failed;
+    if (max_retries < data[i].max_retries)
+      max_retries = data[i].max_retries;
+#endif /* ! TM_COMPILER */
     updates += data[i].nb_transfer;
     reads += data[i].nb_read_all;
     writes += data[i].nb_write_all;
-    if (max_retries < data[i].max_retries)
-      max_retries = data[i].max_retries;
   }
-  printf("Bank total    : %d (expected: 0)\n", total(bank, 0));
+  /* Sanity check */
+  ret = total(bank, 0);
+  printf("Bank total    : %d (expected: 0)\n", ret);
   printf("Duration      : %d (ms)\n", duration);
   printf("#txs          : %lu (%f / s)\n", reads + writes + updates, (reads + writes + updates) * 1000.0 / duration);
   printf("#read txs     : %lu (%f / s)\n", reads, reads * 1000.0 / duration);
   printf("#write txs    : %lu (%f / s)\n", writes, writes * 1000.0 / duration);
   printf("#update txs   : %lu (%f / s)\n", updates, updates * 1000.0 / duration);
+#ifndef TM_COMPILER
   printf("#aborts       : %lu (%f / s)\n", aborts, aborts * 1000.0 / duration);
   printf("  #lock-r     : %lu (%f / s)\n", aborts_locked_read, aborts_locked_read * 1000.0 / duration);
   printf("  #lock-w     : %lu (%f / s)\n", aborts_locked_write, aborts_locked_write * 1000.0 / duration);
@@ -629,16 +683,17 @@ int main(int argc, char **argv)
     printf("  90th perc.  : %f\n", ab_stats.percentile_90);
     printf("  95th perc.  : %f\n", ab_stats.percentile_95);
   }
+#endif /* ! TM_COMPILER */
 
   /* Delete bank and accounts */
   free(bank->accounts);
   free(bank);
 
   /* Cleanup STM */
-  stm_exit();
+  TM_EXIT;
 
   free(threads);
   free(data);
 
-  return 0;
+  return ret;
 }

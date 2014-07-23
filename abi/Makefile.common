@@ -21,14 +21,13 @@ DEFINES += -DCM=CM_SUICIDE
 # DEFINES += -DCM=CM_BACKOFF
 # DEFINES += -DCM=CM_MODULAR
 
-DEFINES += -DCLOCK_IN_CACHE_LINE
 #DEFINES += -DEPOCH_GC
 DEFINES += -UEPOCH_GC
 # DEFINES += -DREAD_LOCKED_DATA
 
 #DEFINES += -DLOCK_SHIFT_EXTRA=0
-# mod_stats instead
-DEFINES += -UINTERNAL_STATS
+DEFINES += -DTM_STATISTICS
+DEFINES += -UTM_STATISTICS2
 
 # DEFINES += -DNO_STACK_CHECK
 # DEFINES += -DTANGER_STATS
@@ -39,13 +38,10 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # Add wrapper for pthread function 
 # DEFINES += -DPTHREAD_WRAPPER
 DEFINES += -UPTHREAD_WRAPPER
+# TODO if THREAD_WRAPPER is defined, library must be linked with -ldl
 
-# Enable HYBRID
-ifdef HYBRID_ASF
-  DEFINES += -DHYBRID_ASF -DASF_STACK -fomit-frame-pointer
-else
-  DEFINES += -UHYBRID_ASF
-endif
+# Define how TLS is used in ABI (should be removed for next release)
+DEFINES += -DTLS_COMPILER
 
 ##############################################################################
 # Do not modify anything below this point!
@@ -66,7 +62,7 @@ endif
 DEF_ABI = $(subst -DEXPLICIT_TX_PARAMETER,,$(DEFINES))
 
 # Rules for intset benchmarks
-BINS = intset-hs intset-ll intset-rb intset-sl
+BINS = intset-hs intset-ll intset-rb intset-sl bank
 
 intset-hs.o:	$(ROOT)/test/intset/intset.c
 	$(TESTCC) $(TESTCFLAGS) -DUSE_HASHSET -c -o $@ $<
@@ -80,6 +76,9 @@ intset-rb.o:	$(ROOT)/test/intset/intset.c
 intset-sl.o:	$(ROOT)/test/intset/intset.c
 	$(TESTCC) $(TESTCFLAGS) -DUSE_SKIPLIST -c -o $@ $<
 
+bank.o:	$(ROOT)/test/bank/bank.c
+	$(TESTCC) $(TESTCFLAGS) -c -o $@ $<
+
 # FIXME in case of ABI $(TMLIB) must be replaced to abi/...
 $(BINS):	%:	%.o all
 	$(TESTLD) -o $@ $< $(TESTLDFLAGS) -lpthread
@@ -88,31 +87,6 @@ test: 	all $(BINS)
 
 intset-clean:
 	rm -f $(BINS)
-
-# Rules for intset ASF specific benchmarks
-BINSASF = intset-hs-asf intset-ll-asf intset-rb-asf intset-sl-asf
-
-intset-hs-asf.o:	$(ROOT)/test-asf/intset/intset.c
-	$(TESTCC) $(TESTCFLAGS) -DUSE_HASHSET -c -o $@ $<
-
-intset-ll-asf.o:	$(ROOT)/test-asf/intset/intset.c
-	$(TESTCC) $(TESTCFLAGS) -DUSE_LINKEDLIST -c -o $@ $<
-
-intset-rb-asf.o:	$(ROOT)/test-asf/intset/intset.c
-	$(TESTCC) $(TESTCFLAGS) -DUSE_RBTREE -c -o $@ $<
-
-intset-sl-asf.o:	$(ROOT)/test-asf/intset/intset.c
-	$(TESTCC) $(TESTCFLAGS) -DUSE_SKIPLIST -c -o $@ $<
-
-# FIXME in case of ABI $(TMLIB) must be replaced to abi/...
-$(BINSASF):	%:	%.o all
-	$(TESTLD) -o $@ $< $(TESTLDFLAGS) -lpthread
-
-# TODO to be tested!
-testasf: all $(BINSASF)
-
-intsetasf-clean:
-	rm -f $(BINSASF)
 
 check: 	test intset-check
 

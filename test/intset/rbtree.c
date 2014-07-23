@@ -185,6 +185,10 @@ TM_CALLABLE
 static node_t*
 TMdelete (TM_ARGDECL  rbtree_t* s, node_t* p);
 
+TM_CALLABLE
+static void
+TMreleaseNode (TM_ARGDECL  node_t* n);
+
 enum {
     RED   = 0,
     BLACK = 1

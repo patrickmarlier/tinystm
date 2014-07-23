@@ -12,26 +12,29 @@ include $(ROOT)/abi/Makefile.common
 ##############################################################################
 ## GCC
 ##############################################################################
-CFLAGS += -DTM_GCC
+CPPFLAGS += -DTM_GCC -I.
 
 # NOTES
 #   lib.map enables to export only some functions
 gcc: 	libitm.so libitm.a 
 
-arch.o: ../arch.S
-	$(CC) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+arch.o: arch.S
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 %.do: 	../%.c 
-	$(CC) -fPIC $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 %.o: 	../%.c 
-	$(CC) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+
+%.s: 	../%.c 
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -fverbose-asm -S -o $@ $<
 
 libitm.a: abi.o arch.o 
 	$(AR) cru $@ $^
 
 libitm.so: 	abi.do arch.o 
-	$(CC) -fPIC $(CFLAGS) -shared -Wl,--version-script,../lib.map -o $@ $^
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) -shared -Wl,--version-script,../lib.map -o $@ $^
 # TODO Check if strip is really needed
 #	strip $@
 #	cp libitm.so libitm.so.1
@@ -40,12 +43,12 @@ libitm.so: 	abi.do arch.o
 ##############################################################################
 
 TESTCC       ?= $(CC)
-TESTCFLAGS   += $(CFLAGS) -DTM_GCC -fgnu-tm
+TESTCFLAGS   += $(CPPFLAGS) $(CFLAGS) -DTM_GCC -fgnu-tm
 TESTLD       ?= $(LD)
 TESTLDFLAGS  += -Wl,-rpath=$(shell pwd)
 TESTLDFLAGS  += -L$(ROOT)/abi/gcc 
 TESTLDFLAGS  += -static -litm
 
-clean: 	intset-clean intsetasf-clean
+clean: 	intset-clean
 	rm -f *.o *.do libitm.a libitm.so
 

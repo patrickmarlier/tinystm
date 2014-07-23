@@ -42,6 +42,7 @@ include Makefile.common
 DEFINES += -DDESIGN=WRITE_BACK_ETL
 # DEFINES += -DDESIGN=WRITE_BACK_CTL
 # DEFINES += -DDESIGN=WRITE_THROUGH
+# DEFINES += -DDESIGN=MODULAR
 
 ########################################################################
 # Several contention management strategies are available:
@@ -93,16 +94,10 @@ DEFINES += -DIRREVOCABLE_ENABLED
 # from disabling them.
 ########################################################################
 
-# DEFINES += -DINTERNAL_STATS
-DEFINES += -UINTERNAL_STATS
-
-########################################################################
-# Ensure that the global clock does not share the same cache line than
-# some other variable of the program.  This should be normally enabled.
-########################################################################
-
-DEFINES += -DCLOCK_IN_CACHE_LINE
-# DEFINES += -UCLOCK_IN_CACHE_LINE
+# DEFINES += -DTM_STATISTICS
+DEFINES += -UTM_STATISTICS
+# DEFINES += -DTM_STATISTICS2
+DEFINES += -UTM_STATISTICS2
 
 ########################################################################
 # Prevent duplicate entries in read/write sets when accessing the same
@@ -197,17 +192,30 @@ DEFINES += -USIGNAL_HANDLER
 ########################################################################
 
 ifdef HYBRID_ASF
-  ifneq ($(HYBRID_ASF), 0)
-    DEFINES += -DHYBRID_ASF -DASF_STACK -fomit-frame-pointer
-  else
-    DEFINES += -UHYBRID_ASF
-  endif
-else
-  DEFINES += -UHYBRID_ASF
+  $(error This release has no support for ASF Hybrid mode)
 endif
 
 # TODO Enable the construction of 32bit lib on 64bit environment 
 
+########################################################################
+# Use COMPILER thread-local storage (TLS) support by default
+# TLS_COMPILER: use __thread keyword
+# TLS_POSIX: use posix (pthread) functions
+# TLS_DARWIN: use posix inline functions
+# TLS_GLIBC: use the space reserved for TM in the GLIBC
+########################################################################
+
+DEFINES += -DTLS_COMPILER
+# DEFINES += -DTLS_POSIX
+# DEFINES += -DTLS_DARWIN
+# DEFINES += -DTLS_GLIBC
+
+########################################################################
+# Enable unit transaction
+########################################################################
+
+# DEFINES += -DUNIT_TX
+DEFINES += -UUNIT_TX
 
 ########################################################################
 # Various default values can also be overridden:
@@ -255,7 +263,8 @@ D := $(DEFINES)
 D := $(D:WRITE_BACK_ETL=0)
 D := $(D:WRITE_BACK_CTL=1)
 D := $(D:WRITE_THROUGH=2)
-D += -DWRITE_BACK_ETL=0 -DWRITE_BACK_CTL=1 -DWRITE_THROUGH=2
+D := $(D:MODULAR=3)
+D += -DWRITE_BACK_ETL=0 -DWRITE_BACK_CTL=1 -DWRITE_THROUGH=2 -DMODULAR=3
 D := $(D:CM_SUICIDE=0)
 D := $(D:CM_DELAY=1)
 D := $(D:CM_BACKOFF=2)
@@ -268,8 +277,8 @@ else
   GC :=
 endif
 
-CFLAGS += -I$(SRCDIR)
-CFLAGS += $(DEFINES)
+CPPFLAGS += -I$(SRCDIR)
+CPPFLAGS += $(DEFINES)
 
 MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
 
@@ -277,23 +286,24 @@ MODULES := $(patsubst %.c,%.o,$(wildcard $(SRCDIR)/mod_*.c))
 
 all:	$(TMLIB)
 
-%.o:	%.c
-	$(CC) $(CFLAGS) -DCOMPILE_FLAGS="$(CFLAGS)" -c -o $@ $<
+%.o:	%.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -c -o $@ $<
 
-%.s:	%.c
-	$(CC) $(CFLAGS) -DCOMPILE_FLAGS="$(CFLAGS)" -fverbose-asm -S -o $@ $<
+# Additional dependencies
+$(SRCDIR)/stm.o:	$(INCDIR)/stm.h
+$(SRCDIR)/stm.o:	$(SRCDIR)/stm_internal.h $(SRCDIR)/stm_wt.h $(SRCDIR)/stm_wbetl.h $(SRCDIR)/stm_wbctl.h $(SRCDIR)/tls.h $(SRCDIR)/utils.h $(SRCDIR)/atomic.h
 
-%.o.c:	%.c
+%.s:	%.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) -DCOMPILE_FLAGS="$(CPPFLAGS) $(CFLAGS)" -fverbose-asm -S -o $@ $<
+
+%.o.c:	%.c Makefile
 	$(UNIFDEF) $(D) $< > $@ || true
 
 $(TMLIB):	$(SRCDIR)/$(TM).o $(SRCDIR)/wrappers.o $(GC) $(MODULES)
-	$(AR) cru $@ $^
+	$(AR) crus $@ $^
 
 test:	$(TMLIB)
 	$(MAKE) -C test
-
-test-asf:	$(TMLIB)
-	$(MAKE) -C test-asf
 
 abi:
 	$(MAKE) -C abi
@@ -314,5 +324,4 @@ clean:
 	rm -f $(TMLIB) $(SRCDIR)/*.o
 	$(MAKE) -C abi clean
 	TARGET=clean $(MAKE) -C test
-	TARGET=clean $(MAKE) -C test-asf
 

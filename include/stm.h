@@ -7,7 +7,7 @@
  * Description:
  *   STM functions.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /**
@@ -28,7 +31,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2011
+ *   2007-2012
  */
 
 /**
@@ -58,8 +61,7 @@
  *   <c>LIBAO_HOME</c> to the installation directory of atomic_ops.
  *
  *   If your system does not support GCC thread-local storage, set the
- *   environment variable <c>NOTLS</c> to a non-empty value before
- *   compilation.
+ *   variable <c>TLS</c> to TLS_POSIX value into the Makefile.common.
  *
  *   To compile TinySTM libraries, execute <c>make</c> in the main
  *   directory.  To compile test applications, execute <c>make test</c>.
@@ -78,40 +80,42 @@
 # include <stdio.h>
 # include <stdlib.h>
 
-# include "../src/atomic.h" // FIXME atomic.h should be in include/ ?
+/**
+ * Version string
+ */
+# define STM_VERSION                    "1.0.4"
+/**
+ * Version number (times 100)
+ */
+# define STM_VERSION_NB                 104
 
-/* Version string */
-# define STM_VERSION                    "1.0.3"
-/* Version number (times 100) */
-# define STM_VERSION_NB                 103
+/**
+ * Calling convention
+ */
+# ifdef __i386__
+/* The fastcall calling convention improves performance on old ia32
+ * architecture that does not implement store forwarding.
+ * regparm(3) does not improve significantly the performance. */
+#  define _CALLCONV                     __attribute__((fastcall))
+# else
+#  define _CALLCONV
+# endif /* __i386__ */
 
 # ifdef __cplusplus
 extern "C" {
 # endif
 
-/*
+struct stm_tx;
+/**
+ * Return the current transaction descriptor.
  * The library does not require to pass the current transaction as a
  * parameter to the functions (the current transaction is stored in a
- * thread-local variable).  One can, however, compile the library with
+ * thread-local variable).  One can, however, use the library with
  * explicit transaction parameters.  This is useful, for instance, for
  * performance on architectures that do not support TLS or for easier
  * compiler integration.
  */
-struct stm_tx;
-# ifdef EXPLICIT_TX_PARAMETER
-#  define TXTYPE                        struct stm_tx *
-#  define TXPARAM                       struct stm_tx *tx
-#  define TXPARAMS                      struct stm_tx *tx,
-#  define TXARG                         (struct stm_tx *)tx
-#  define TXARGS                        (struct stm_tx *)tx,
-struct stm_tx *stm_current_tx();
-# else /* ! EXPLICIT_TX_PARAMETER */
-#  define TXTYPE                        void
-#  define TXPARAM                       /* Nothing */
-#  define TXPARAMS                      /* Nothing */
-#  define TXARG                         /* Nothing */
-#  define TXARGS                        /* Nothing */
-#endif /* ! EXPLICIT_TX_PARAMETER */
+struct stm_tx *stm_current_tx(void) _CALLCONV;
 
 /* ################################################################### *
  * TYPES
@@ -126,7 +130,8 @@ typedef uintptr_t stm_word_t;
 /**
  * Transaction attributes specified by the application.
  */
-typedef struct stm_tx_attr {
+typedef union stm_tx_attr {
+  struct {
   /**
    * Application-specific identifier for the transaction.  Typically,
    * each transactional construct (atomic block) should have a different
@@ -134,7 +139,7 @@ typedef struct stm_tx_attr {
    * improving performance, for instance by not scheduling together
    * atomic blocks that have conflicted often in the past.
    */
-  int id;
+  unsigned int id : 16;
   /**
    * Indicates whether the transaction is read-only.  This information
    * is used as a hint.  If a read-only transaction performs a write, it
@@ -160,11 +165,23 @@ typedef struct stm_tx_attr {
    */
   unsigned int no_retry : 1;
   /**
-   * Indicates how soon the transaction should be completed.  This
-   * information may be used by a contention manager or the scheduler to
-   * prioritize transactions.
+   * Indicates that the transaction cannot use the snapshot extension
+   * mechanism. (Working only with UNIT_TX)
    */
-  stm_word_t deadline;
+  unsigned int no_extend : 1;
+  /**
+   * Indicates that the transaction is irrevocable.
+   * 1 is simple irrevocable and 3 is serial irrevocable.
+   * (Working only with IRREVOCABLE_ENABLED)
+   * TODO Not yet implemented
+   */
+  /* unsigned int irrevocable : 2; */
+  };
+  /**
+   * All transaction attributes represented as one integer.
+   * For convenience, allow (stm_tx_attr_t)0 cast.
+   */
+  int32_t attrs;
 } stm_tx_attr_t;
 
 /**
@@ -173,65 +190,78 @@ typedef struct stm_tx_attr {
  */
 enum {
   /**
-   * Abort due to explicit call from the programmer (no retry).
+   * Indicates that the instrumented code path must be executed.
    */
-  STM_ABORT_EXPLICIT = (1 << 4),
+  STM_PATH_INSTRUMENTED = 0x01,
+  /**
+   * Indicates that the uninstrumented code path must be executed
+   * (serial irrevocable mode).
+   */
+  STM_PATH_UNINSTRUMENTED = 0x02,
+  /**
+   * Abort due to explicit call from the programmer.
+   */
+  STM_ABORT_EXPLICIT = (1 << 5),
+  /**
+   * Abort and no retry due to explicit call from the programmer.
+   */
+  STM_ABORT_NO_RETRY = (1 << 5) | (0x01 << 8),
   /**
    * Implicit abort (high order bits indicate more detailed reason).
    */
-  STM_ABORT_IMPLICIT = (1 << 5),
+  STM_ABORT_IMPLICIT = (1 << 6),
   /**
    * Abort upon reading a memory location being read by another
    * transaction.
    */
-  STM_ABORT_RR_CONFLICT = (1 << 5) | (0x01 << 8),
+  STM_ABORT_RR_CONFLICT = (1 << 6) | (0x01 << 8),
   /**
    * Abort upon writing a memory location being read by another
    * transaction.
    */
-  STM_ABORT_RW_CONFLICT = (1 << 5) | (0x02 << 8),
+  STM_ABORT_RW_CONFLICT = (1 << 6) | (0x02 << 8),
   /**
    * Abort upon reading a memory location being written by another
    * transaction.
    */
-  STM_ABORT_WR_CONFLICT = (1 << 5) | (0x03 << 8),
+  STM_ABORT_WR_CONFLICT = (1 << 6) | (0x03 << 8),
   /**
    * Abort upon writing a memory location being written by another
    * transaction.
    */
-  STM_ABORT_WW_CONFLICT = (1 << 5) | (0x04 << 8),
+  STM_ABORT_WW_CONFLICT = (1 << 6) | (0x04 << 8),
   /**
    * Abort upon read due to failed validation.
    */
-  STM_ABORT_VAL_READ = (1 << 5) | (0x05 << 8),
+  STM_ABORT_VAL_READ = (1 << 6) | (0x05 << 8),
   /**
    * Abort upon write due to failed validation.
    */
-  STM_ABORT_VAL_WRITE = (1 << 5) | (0x06 << 8),
+  STM_ABORT_VAL_WRITE = (1 << 6) | (0x06 << 8),
   /**
    * Abort upon commit due to failed validation.
    */
-  STM_ABORT_VALIDATE = (1 << 5) | (0x07 << 8),
-  /**
-   * Abort upon write from a transaction declared as read-only.
-   */
-  STM_ABORT_RO_WRITE = (1 << 5) | (0x08 << 8),
+  STM_ABORT_VALIDATE = (1 << 6) | (0x07 << 8),
   /**
    * Abort upon deferring to an irrevocable transaction.
    */
-  STM_ABORT_IRREVOCABLE = (1 << 5) | (0x09 << 8),
+  STM_ABORT_IRREVOCABLE = (1 << 6) | (0x09 << 8),
   /**
    * Abort due to being killed by another transaction.
    */
-  STM_ABORT_KILLED = (1 << 5) | (0x0A << 8),
+  STM_ABORT_KILLED = (1 << 6) | (0x0A << 8),
   /**
    * Abort due to receiving a signal.
    */
-  STM_ABORT_SIGNAL = (1 << 5) | (0x0B << 8),
+  STM_ABORT_SIGNAL = (1 << 6) | (0x0B << 8),
+  /**
+   * Abort due to reaching the write set size limit.
+   */
+  STM_ABORT_EXTEND_WS = (1 << 6) | (0x0C << 8),
   /**
    * Abort due to other reasons (internal to the protocol).
    */
-  STM_ABORT_OTHER = (1 << 5) | (0x0F << 8)
+  STM_ABORT_OTHER = (1 << 6) | (0x0F << 8)
 };
 
 /* ################################################################### *
@@ -243,27 +273,31 @@ enum {
  * the main thread, before any access to the other functions of the
  * library.
  */
-void stm_init();
+void stm_init(void) _CALLCONV;
 
 /**
  * Clean up the STM library.  This function must be called once, from
  * the main thread, after all transactional threads have completed.
  */
-void stm_exit();
+void stm_exit(void) _CALLCONV;
 
 /**
  * Initialize a transactional thread.  This function must be called once
  * from each thread that performs transactional operations, before the
  * thread calls any other functions of the library.
  */
-TXTYPE stm_init_thread();
+struct stm_tx *stm_init_thread(void) _CALLCONV;
 
+//@{
 /**
  * Clean up a transactional thread.  This function must be called once
  * from each thread that performs transactional operations, upon exit.
  */
-void stm_exit_thread(TXPARAM);
+void stm_exit_thread(void) _CALLCONV;
+void stm_exit_thread_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
+//@{
 /**
  * Start a transaction.
  *
@@ -279,8 +313,11 @@ void stm_exit_thread(TXPARAM);
  *   sigsetjmp() as an abort will restart the top-level transaction
  *   (flat nesting).
  */
-sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr);
+sigjmp_buf *stm_start(stm_tx_attr_t attr) _CALLCONV;
+sigjmp_buf *stm_start_tx(struct stm_tx *tx, stm_tx_attr_t attr) _CALLCONV;
+//@}
 
+//@{
 /**
  * Try to commit a transaction.  If successful, the function returns 1.
  * Otherwise, execution continues at the point where sigsetjmp() has
@@ -290,8 +327,11 @@ sigjmp_buf *stm_start(TXPARAMS stm_tx_attr_t *attr);
  * @return
  *   1 upon success, 0 otherwise.
  */
-int stm_commit(TXPARAM);
+int stm_commit(void) _CALLCONV;
+int stm_commit_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
+//@{
 /**
  * Explicitly abort a transaction.  Execution continues at the point
  * where sigsetjmp() has been called after starting the outermost
@@ -301,8 +341,11 @@ int stm_commit(TXPARAM);
  * @param abort_reason
  *   Reason for aborting the transaction.
  */
-void stm_abort(TXPARAMS int abort_reason);
+void stm_abort(int abort_reason) _CALLCONV;
+void stm_abort_tx(struct stm_tx *tx, int abort_reason) _CALLCONV;
+//@}
 
+//@{
 /**
  * Transactional load.  Read the specified memory location in the
  * context of the current transaction and return its value.  Upon
@@ -315,8 +358,11 @@ void stm_abort(TXPARAMS int abort_reason);
  * @return
  *   Value read from the specified address.
  */
-stm_word_t stm_load(TXPARAMS volatile stm_word_t *addr);
+stm_word_t stm_load(volatile stm_word_t *addr) _CALLCONV;
+stm_word_t stm_load_tx(struct stm_tx *tx, volatile stm_word_t *addr) _CALLCONV;
+//@}
 
+//@{
 /**
  * Transactional store.  Write a word-sized value to the specified
  * memory location in the context of the current transaction.  Upon
@@ -328,8 +374,11 @@ stm_word_t stm_load(TXPARAMS volatile stm_word_t *addr);
  * @param value
  *   Value to be written.
  */
-void stm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
+void stm_store(volatile stm_word_t *addr, stm_word_t value) _CALLCONV;
+void stm_store_tx(struct stm_tx *tx, volatile stm_word_t *addr, stm_word_t value) _CALLCONV;
+//@}
 
+//@{
 /**
  * Transactional store.  Write a value to the specified memory location
  * in the context of the current transaction.  The value may be smaller
@@ -345,34 +394,46 @@ void stm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
  * @param mask
  *   Mask specifying the bits to be written.
  */
-void stm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
+void stm_store2(volatile stm_word_t *addr, stm_word_t value, stm_word_t mask) _CALLCONV;
+void stm_store2_tx(struct stm_tx *tx, volatile stm_word_t *addr, stm_word_t value, stm_word_t mask) _CALLCONV;
+//@}
 
+//@{
 /**
  * Check if the current transaction is still active.
  *
  * @return
  *   True (non-zero) if the transaction is active, false (zero) otherwise.
  */
-int stm_active(TXPARAM);
+int stm_active(void) _CALLCONV;
+int stm_active_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
+//@{
 /**
  * Check if the current transaction has aborted.
  *
  * @return
  *   True (non-zero) if the transaction has aborted, false (zero) otherwise.
  */
-int stm_aborted(TXPARAM);
+int stm_aborted(void) _CALLCONV;
+int stm_aborted_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
+//@{
 /**
  * Check if the current transaction is still active and in irrevocable
  * state.
  *
- * @return 
+ * @return
  *   True (non-zero) if the transaction is active and irrevocable, false
  *   (zero) otherwise.
  */
-int stm_irrevocable(TXPARAM);
+int stm_irrevocable(void) _CALLCONV;
+int stm_irrevocable_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
+//@{
 /**
  * Get the environment used by the current thread to jump back upon
  * abort.  This environment should be used when calling sigsetjmp()
@@ -385,8 +446,11 @@ int stm_irrevocable(TXPARAM);
  *   The environment to use for saving the stack context, or NULL if the
  *   transaction is nested.
  */
-sigjmp_buf *stm_get_env(TXPARAM);
+sigjmp_buf *stm_get_env(void) _CALLCONV;
+sigjmp_buf *stm_get_env_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
+//@{
 /**
  * Get attributes associated with the current transactions, if any.
  * These attributes were passed as parameters when starting the
@@ -395,18 +459,11 @@ sigjmp_buf *stm_get_env(TXPARAM);
  * @return Attributes associated with the current transaction, or NULL
  *   if no attributes were specified when starting the transaction.
  */
-stm_tx_attr_t *stm_get_attributes(TXPARAM);
+stm_tx_attr_t stm_get_attributes(void) _CALLCONV;
+stm_tx_attr_t stm_get_attributes_tx(struct stm_tx *tx) _CALLCONV;
+//@}
 
-/**
- * Get attributes associated with the specified transaction.
- * These attributes were passed as parameters when starting the
- * transaction.
- *
- * @return Attributes associated with the specified transaction, or NULL
- *   if no attributes were specified when starting the transaction.
- */
-stm_tx_attr_t *stm_get_attributes_tx(struct stm_tx *tx);
-
+//@{
 /**
  * Get various statistics about the current thread/transaction.  See the
  * source code (stm.c) for a list of supported statistics.
@@ -419,7 +476,9 @@ stm_tx_attr_t *stm_get_attributes_tx(struct stm_tx *tx);
  * @return
  *   1 upon success, 0 otherwise.
  */
-int stm_get_stats(TXPARAMS const char *name, void *val);
+int stm_get_stats(const char *name, void *val) _CALLCONV;
+int stm_get_stats_tx(struct stm_tx *tx, const char *name, void *val) _CALLCONV;
+//@}
 
 /**
  * Get various parameters of the STM library.  See the source code
@@ -433,7 +492,7 @@ int stm_get_stats(TXPARAMS const char *name, void *val);
  * @return
  *   1 upon success, 0 otherwise.
  */
-int stm_get_parameter(const char *name, void *val);
+int stm_get_parameter(const char *name, void *val) _CALLCONV;
 
 /**
  * Set various parameters of the STM library.  See the source code
@@ -446,7 +505,7 @@ int stm_get_parameter(const char *name, void *val);
  * @return
  *   1 upon success, 0 otherwise.
  */
-int stm_set_parameter(const char *name, void *val);
+int stm_set_parameter(const char *name, void *val) _CALLCONV;
 
 /**
  * Create a key to associate application-specific data to the current
@@ -456,7 +515,7 @@ int stm_set_parameter(const char *name, void *val);
  * @return
  *   The new key.
  */
-int stm_create_specific();
+int stm_create_specific(void) _CALLCONV;
 
 /**
  * Get application-specific data associated to the current
@@ -467,7 +526,7 @@ int stm_create_specific();
  * @return
  *   Data stored under the given key.
  */
-void *stm_get_specific(TXPARAMS int key);
+void *stm_get_specific(int key) _CALLCONV;
 
 /**
  * Set application-specific data associated to the current
@@ -478,7 +537,7 @@ void *stm_get_specific(TXPARAMS int key);
  * @param data
  *   Data to store under the given key.
  */
-void stm_set_specific(TXPARAMS int key, void *data);
+void stm_set_specific(int key, void *data) _CALLCONV;
 
 /**
  * Register application-specific callbacks that are triggered each time
@@ -501,13 +560,13 @@ void stm_set_specific(TXPARAMS int key, void *data);
  * @return
  *   1 if the callbacks have been successfully registered, 0 otherwise.
  */
-int stm_register(void (*on_thread_init)(TXPARAMS void *arg),
-                 void (*on_thread_exit)(TXPARAMS void *arg),
-                 void (*on_start)(TXPARAMS void *arg),
-                 void (*on_precommit)(TXPARAMS void *arg),
-                 void (*on_commit)(TXPARAMS void *arg),
-                 void (*on_abort)(TXPARAMS void *arg),
-                 void *arg);
+int stm_register(void (*on_thread_init)(void *arg),
+                 void (*on_thread_exit)(void *arg),
+                 void (*on_start)(void *arg),
+                 void (*on_precommit)(void *arg),
+                 void (*on_commit)(void *arg),
+                 void (*on_abort)(void *arg),
+                 void *arg) _CALLCONV;
 
 /**
  * Transaction-safe load.  Read the specified memory location outside of
@@ -523,7 +582,7 @@ int stm_register(void (*on_thread_init)(TXPARAMS void *arg),
  * @return
  *   Value read from the specified address.
  */
-stm_word_t stm_unit_load(volatile stm_word_t *addr, stm_word_t *timestamp);
+stm_word_t stm_unit_load(volatile stm_word_t *addr, stm_word_t *timestamp) _CALLCONV;
 
 /**
  * Transaction-safe store.  Write a word-sized value to the specified
@@ -546,7 +605,7 @@ stm_word_t stm_unit_load(volatile stm_word_t *addr, stm_word_t *timestamp);
  * @return
  *   1 if value has been written, 0 otherwise.
  */
-int stm_unit_store(volatile stm_word_t *addr, stm_word_t value, stm_word_t *timestamp);
+int stm_unit_store(volatile stm_word_t *addr, stm_word_t value, stm_word_t *timestamp) _CALLCONV;
 
 /**
  * Transaction-safe store.  Write a value to the specified memory
@@ -573,8 +632,9 @@ int stm_unit_store(volatile stm_word_t *addr, stm_word_t value, stm_word_t *time
  * @return
  *   1 if value has been written, 0 otherwise.
  */
-int stm_unit_store2(volatile stm_word_t *addr, stm_word_t value, stm_word_t mask, stm_word_t *timestamp);
+int stm_unit_store2(volatile stm_word_t *addr, stm_word_t value, stm_word_t mask, stm_word_t *timestamp) _CALLCONV;
 
+//@{
 /**
  * Enable or disable snapshot extensions for the current transaction,
  * and optionally set an upper bound for the snapshot.  This function is
@@ -589,7 +649,9 @@ int stm_unit_store2(volatile stm_word_t *addr, stm_word_t value, stm_word_t mask
  *   than the current upper bound of the snapshot, update the upper
  *   bound to the value of the referenced variable.
  */
-void stm_set_extension(TXPARAMS int enable, stm_word_t *timestamp);
+void stm_set_extension(int enable, stm_word_t *timestamp) _CALLCONV;
+void stm_set_extension_tx(struct stm_tx *tx, int enable, stm_word_t *timestamp) _CALLCONV;
+//@}
 
 /**
  * Read the current value of the global clock (used for timestamps).
@@ -598,8 +660,9 @@ void stm_set_extension(TXPARAMS int enable, stm_word_t *timestamp);
  * @return
  *   Value of the global clock.
  */
-stm_word_t stm_get_clock();
+stm_word_t stm_get_clock(void) _CALLCONV;
 
+//@{
 /**
  * Enter irrevocable mode for the current transaction.  If successful,
  * the function returns 1.  Otherwise, it aborts and execution continues
@@ -613,154 +676,9 @@ stm_word_t stm_get_clock();
  * @return
  *   1 upon success, 0 otherwise.
  */
-int stm_set_irrevocable(TXPARAMS int serial);
-
-#ifdef HYBRID_ASF
-
-/**
- * Start an hybrid transaction.
- *
- * @param attr
- *   Specifies optional attributes associated to the transaction.
- *   Attributes are copied in transaction-local storage.  If null, the
- *   transaction uses default attributes.
- * @return
- *   Environment (stack context) to be used to jump back upon abort.  It
- *   is the responsibility of the application to call sigsetjmp()
- *   immediately after starting the transaction.  If the transaction is
- *   nested, the function returns NULL and one should not call
- *   sigsetjmp() as an abort will restart the top-level transaction
- *   (flat nesting).
- */
-sigjmp_buf *hytm_start(TXPARAMS stm_tx_attr_t *attr);
-
-/**
- * Try to commit an hybrid transaction.
- * 
- * @return
- *   1 upon success, 0 otherwise.
- */
-int hytm_commit(TXPARAM);
-
-/**
- * Explicitly abort an hybrid transaction.
- *
- * @param abort_reason
- *   Reason for aborting the transaction.
- */
-void hytm_abort(TXPARAMS int abort_reason);
-
-/**
- * Transactional hybrid load. 
- *
- * @param addr
- *   Address of the memory location.
- * @return
- *   Value read from the specified address.
- */
-stm_word_t hytm_load(TXPARAMS volatile stm_word_t *addr);
-
-/**
- * Transactional hybrid store.
- *
- * @param addr
- *   Address of the memory location.
- * @param value
- *   Value to be written.
- */
-void hytm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
-
-/**
- * Transactional hybrid store.
- *
- * @param addr
- *   Address of the memory location.
- * @param value
- *   Value to be written.
- * @param mask
- *   Mask specifying the bits to be written.
- */
-void hytm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
-
-/**
- * Start a transaction.
- *
- * @param attr
- *   Specifies optional attributes associated to the transaction.
- *   Attributes are copied in transaction-local storage.  If null, the
- *   transaction uses default attributes.
- * @return
- *   Environment (stack context) to be used to jump back upon abort.  It
- *   is the responsibility of the application to call sigsetjmp()
- *   immediately after starting the transaction.  If the transaction is
- *   nested, the function returns NULL and one should not call
- *   sigsetjmp() as an abort will restart the top-level transaction
- *   (flat nesting).
- */
-sigjmp_buf *tm_start(TXPARAMS stm_tx_attr_t *attr);
-
-/**
- * Try to commit a transaction.
- * 
- * @return
- *   1 upon success, 0 otherwise.
- */
-int tm_commit(TXPARAM);
-
-/**
- * Explicitly abort a transaction.
- *
- * @param abort_reason
- *   Reason for aborting the transaction.
- */
-void tm_abort(TXPARAMS int abort_reason);
-
-/**
- * Transactional load. 
- *
- * @param addr
- *   Address of the memory location.
- * @return
- *   Value read from the specified address.
- */
-stm_word_t tm_load(TXPARAMS volatile stm_word_t *addr);
-
-/**
- * Transactional store.
- *
- * @param addr
- *   Address of the memory location.
- * @param value
- *   Value to be written.
- */
-void tm_store(TXPARAMS volatile stm_word_t *addr, stm_word_t value);
-
-/**
- * Transactional store.
- *
- * @param addr
- *   Address of the memory location.
- * @param value
- *   Value to be written.
- * @param mask
- *   Mask specifying the bits to be written.
- */
-void tm_store2(TXPARAMS volatile stm_word_t *addr, stm_word_t value, stm_word_t mask);
-
-/**
- * Check if the current transaction is an hybrid transaction.
- *
- * @return
- *   True (non-zero) if the transaction is hybrid, false (zero) otherwise.
- */
-int tm_hybrid(TXPARAM);
-
-/**
- * Abort the current hybrid transaction and retry it using software mode. 
- * No effect is the transaction is already in software mode.
- */
-void tm_restart_software(TXPARAM);
-#endif /* HYBRID_ASF */
+int stm_set_irrevocable(int serial) _CALLCONV;
+int stm_set_irrevocable_tx(struct stm_tx *tx, int serial) _CALLCONV;
+//@}
 
 #ifdef __cplusplus
 }

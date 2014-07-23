@@ -7,7 +7,7 @@
  * Description:
  *   Module for user callbacks.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /**
@@ -27,7 +30,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2011
+ *   2007-2012
  */
 
 #ifndef _MOD_CB_H_
@@ -52,7 +55,7 @@ extern "C" {
  * @return
  *   1 if the callbacks have been successfully registered, 0 otherwise.
  */
-int stm_on_commit(TXPARAMS void (*on_commit)(void *arg), void *arg);
+int stm_on_commit(void (*on_commit)(void *arg), void *arg);
 
 /**
  * Register an application-specific callback triggered when the current
@@ -67,7 +70,7 @@ int stm_on_commit(TXPARAMS void (*on_commit)(void *arg), void *arg);
  * @return
  *   1 if the callbacks have been successfully registered, 0 otherwise.
  */
-int stm_on_abort(TXPARAMS void (*on_abort)(void *arg), void *arg);
+int stm_on_abort(void (*on_abort)(void *arg), void *arg);
 
 /**
  * Initialize the module.  This function must be called once, from the
@@ -75,7 +78,7 @@ int stm_on_abort(TXPARAMS void (*on_abort)(void *arg), void *arg);
  * performing any transactional operation.
  *
  */
-void mod_cb_init();
+void mod_cb_init(void);
 
 # ifdef __cplusplus
 }

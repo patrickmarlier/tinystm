@@ -13,26 +13,26 @@ include $(ROOT)/abi/Makefile.common
 ##############################################################################
 # TODO Currently it is a copy of GCC-TM Makefile but I didn't find a best way
 # to do that until now
-CFLAGS += -DTM_GCC
+CPPFLAGS += -DTM_GCC -I../gcc
 
 # NOTES
 #   lib.map enables to export only some functions
 gcc: 	libitm.so libitm.a 
 
-arch.o: ../arch.S
-	$(CC) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+arch.o: ../gcc/arch.S
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 %.do: 	../%.c 
-	$(CC) -fPIC $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 %.o: 	../%.c 
-	$(CC) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEF_ABI) -c -o $@ $<
 
 libitm.a: abi.o arch.o 
 	$(AR) cru $@ $^
 
 libitm.so: 	abi.do arch.o 
-	$(CC) -fPIC $(CFLAGS) -shared -Wl,--version-script,../lib.map -o $@ $^
+	$(CC) -fPIC $(CPPFLAGS) $(CFLAGS) -shared -Wl,--version-script,../lib.map -o $@ $^
 # TODO Check if strip is really needed
 #	strip $@
 #	cp libitm.so libitm.so.1
@@ -41,10 +41,12 @@ libitm.so: 	abi.do arch.o
 ##############################################################################
 
 TESTCC       ?= gcc
-TESTCFLAGS   += -DTM_ABI 
+TESTCFLAGS   += -Wall -O2 -march=native -DTM_ABI -I../gcc/ -DTLS 
 TESTLD       ?= gcc
 TESTLDFLAGS  += -Wl,-rpath=$(shell pwd)
 TESTLDFLAGS  += -L$(shell pwd) 
+# TESTLDFLAGS  += libitm.a
+# FIXME: see why big perf degradation with shared library
 TESTLDFLAGS  += -litm
 
 clean: 	intset-clean

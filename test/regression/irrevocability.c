@@ -7,7 +7,7 @@
  * Description:
  *   Regression test for irrevocability.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 #ifdef NDEBUG
@@ -69,10 +72,10 @@ typedef struct thread_data {
   char padding[64];
 } thread_data_t;
 
-void *test(void *v)
+static void *test(void *v)
 {
   unsigned int seed;
-  int i, n, irrevocable, serial;
+  int i, n, irrevocable, serial, path;
   long l;
   sigjmp_buf *e;
   thread_data_t *d = (thread_data_t *)v;
@@ -82,21 +85,29 @@ void *test(void *v)
   while (stop == 0) {
     irrevocable = (rand_r(&seed) < RAND_MAX / 100 * d->irrevocable_percent ? 1 : 0);
     serial = (rand_r(&seed) < RAND_MAX / 2 ? 1 : 0);
-//    irrevocable=1;
-//    serial=1;
-    e = stm_start(NULL);
-    if (e != NULL)
-      sigsetjmp(*e, 0);
+//    irrevocable = 1;
+//    serial = 1;
+    e = stm_start((stm_tx_attr_t)0);
+    path = sigsetjmp(*e, 0);
     if (irrevocable == 4) {
       /* Aborted while in irrevocable mode => error */
       fprintf(stderr, "ERROR: aborted while in irrevocable mode\n");
       exit(1);
     }
-    for (n = rand_r(&seed) % NB_SHUFFLES; n > 0; n--) {
-      i = rand_r(&seed) % NB_ELEMENTS;
-      stm_store_long(&data[i], stm_load_long(&data[i]) + 1);
-      i = rand_r(&seed) % NB_ELEMENTS;
-      stm_store_long(&data[i], stm_load_long(&data[i]) - 1);
+    if (path & STM_PATH_UNINSTRUMENTED) {
+      for (n = rand_r(&seed) % NB_SHUFFLES; n > 0; n--) {
+        i = rand_r(&seed) % NB_ELEMENTS;
+        data[i] = data[i] + 1;
+        i = rand_r(&seed) % NB_ELEMENTS;
+        data[i] = data[i] - 1;
+      }
+    } else {
+      for (n = rand_r(&seed) % NB_SHUFFLES; n > 0; n--) {
+        i = rand_r(&seed) % NB_ELEMENTS;
+        stm_store_long(&data[i], stm_load_long(&data[i]) + 1);
+        i = rand_r(&seed) % NB_ELEMENTS;
+        stm_store_long(&data[i], stm_load_long(&data[i]) - 1);
+      }
     }
     if (irrevocable) {
       if (irrevocable == 3) {
@@ -111,7 +122,7 @@ void *test(void *v)
       }
       irrevocable = 4;
       /* Once in irrevocable mode, we cannot abort */
-      if (serial) {
+      if (path & STM_PATH_UNINSTRUMENTED) {
         /* No other transaction can execute concurrently */
         for (i = 0, l = 0; i < NB_ELEMENTS; i++)
           l += data[i];
@@ -129,8 +140,13 @@ void *test(void *v)
         nb_irrevocable_parallel++;
       }
     }
-    for (i = 0, l = 0; i < NB_ELEMENTS; i++)
-      l += stm_load_long(&data[i]);
+    if (path & STM_PATH_UNINSTRUMENTED) {
+      for (i = 0, l = 0; i < NB_ELEMENTS; i++)
+        l += data[i];
+    } else {
+      for (i = 0, l = 0; i < NB_ELEMENTS; i++)
+        l += stm_load_long(&data[i]);
+    }
     assert(l == 0);
     stm_commit();
   }
@@ -240,7 +256,7 @@ int main(int argc, char **argv)
 
   printf("CM           : %s\n", (cm == NULL ? "DEFAULT" : cm));
   printf("Duration     : %d\n", duration);
-  printf("Irrevocable  : %d\%%\n", irrevocable_percent);
+  printf("Irrevocable  : %d%%\n", irrevocable_percent);
   printf("Nb threads   : %d\n", nb_threads);
 
   for (i = 0; i < NB_ELEMENTS; i++)

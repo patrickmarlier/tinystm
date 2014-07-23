@@ -7,7 +7,7 @@
  * Description:
  *   Module for dynamic memory management.
  *
- * Copyright (c) 2007-2011.
+ * Copyright (c) 2007-2012.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -18,6 +18,9 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * This program has a dual license and can also be distributed
+ * under the terms of the MIT license.
  */
 
 /**
@@ -31,7 +34,7 @@
  *   Pascal Felber <pascal.felber@unine.ch>
  *   Patrick Marlier <patrick.marlier@unine.ch>
  * @date
- *   2007-2011
+ *   2007-2012
  */
 
 #ifndef _MOD_MEM_H_
@@ -43,6 +46,7 @@
 extern "C" {
 # endif
 
+//@{
 /**
  * Allocate memory from inside a transaction.  Allocated memory is
  * implicitly freed upon abort.
@@ -52,10 +56,13 @@ extern "C" {
  * @return
  *   Pointer to the allocated memory block.
  */
-void *stm_malloc(TXPARAMS size_t size);
+void *stm_malloc(size_t size);
+void *stm_malloc_tx(struct stm_tx *tx, size_t size);
+//@}
 
+//@{
 /**
- * Allocate initialized memory from inside a transaction.  Allocated 
+ * Allocate initialized memory from inside a transaction.  Allocated
  * memory is implicitly freed upon abort.
  *
  * @param nm
@@ -65,8 +72,11 @@ void *stm_malloc(TXPARAMS size_t size);
  * @return
  *   Pointer to the allocated memory block.
  */
-void *stm_calloc(TXPARAMS size_t nm, size_t size);
+void *stm_calloc(size_t nm, size_t size);
+void *stm_calloc_tx(struct stm_tx *tx, size_t nm, size_t size);
+//@}
 
+//@{
 /**
  * Free memory from inside a transaction.  Freed memory is only returned
  * to the system upon commit and can optionally be overwritten (more
@@ -79,8 +89,11 @@ void *stm_calloc(TXPARAMS size_t nm, size_t size);
  * @param size
  *   Number of bytes to overwrite.
  */
-void stm_free(TXPARAMS void *addr, size_t size);
+void stm_free(void *addr, size_t size);
+void stm_free_tx(struct stm_tx *tx, void *addr, size_t size);
+//@}
 
+//@{
 /**
  * Free memory from inside a transaction.  Freed memory is only returned
  * to the system upon commit and can optionally be overwritten (more
@@ -95,7 +108,9 @@ void stm_free(TXPARAMS void *addr, size_t size);
  * @param size
  *   Number of bytes to overwrite.
  */
-void stm_free2(TXPARAMS void *addr, size_t idx, size_t size);
+void stm_free2(void *addr, size_t idx, size_t size);
+void stm_free2_tx(struct stm_tx *tx, void *addr, size_t idx, size_t size);
+//@}
 
 /**
  * Initialize the module.  This function must be called once, from the

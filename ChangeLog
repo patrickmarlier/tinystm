@@ -1,3 +1,6 @@
+2012-10-23  Pascal Felber  <pascal.felber@unine.ch>
+	* Added MIT license (dual license).
+
 2011-11-17  Patrick Marlier <patrick.marlier@unine.ch>
 	* Fixed stack saving and minor changes for DTMC (tanger).
 
