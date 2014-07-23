@@ -20,7 +20,16 @@
  *
  * =============================================================================
  *
+ * For the license of bayes/sort.h and bayes/sort.c, please see the header
+ * of the files.
+ * 
+ * ------------------------------------------------------------------------
+ * 
  * For the license of kmeans, please see kmeans/LICENSE.kmeans
+ * 
+ * ------------------------------------------------------------------------
+ * 
+ * For the license of ssca2, please see ssca2/COPYRIGHT
  * 
  * ------------------------------------------------------------------------
  * 
@@ -75,8 +84,8 @@
 #define RBTREE_H 1
 
 
-#include <inttypes.h>
 #include "tm.h"
+#include "types.h"
 
 
 #ifdef __cplusplus
@@ -84,27 +93,15 @@ extern "C" {
 #endif
 
 
-typedef struct node {
-    intptr_t k;
-    intptr_t v;
-    struct node* p;
-    struct node* l;
-    struct node* r;
-    intptr_t c;
-} node_t;
-
-
-typedef struct rbtree {
-    node_t* root;
-} rbtree_t;
+typedef struct rbtree rbtree_t;
 
 
 /* =============================================================================
  * rbtree_verify
  * =============================================================================
  */
-int
-rbtree_verify (rbtree_t* s, int verbose);
+long
+rbtree_verify (rbtree_t* s, long verbose);
 
 
 /* =============================================================================
@@ -112,7 +109,7 @@ rbtree_verify (rbtree_t* s, int verbose);
  * =============================================================================
  */
 rbtree_t*
-rbtree_alloc ();
+rbtree_alloc (long (*compare)(const void*, const void*));
 
 
 /* =============================================================================
@@ -120,7 +117,7 @@ rbtree_alloc ();
  * =============================================================================
  */
 rbtree_t*
-TMrbtree_alloc (TM_ARGDECL_ALONE);
+TMrbtree_alloc (TM_ARGDECL  long (*compare)(const void*, const void*));
 
 
 /* =============================================================================
@@ -141,91 +138,100 @@ TMrbtree_free (TM_ARGDECL  rbtree_t* r);
 
 /* =============================================================================
  * rbtree_insert
+ * -- Returns TRUE on success
  * =============================================================================
  */
-int
-rbtree_insert (rbtree_t* r, int key, int val);
+bool_t
+rbtree_insert (rbtree_t* r, void* key, void* val);
 
 
 /* =============================================================================
  * TMrbtree_insert
+ * -- Returns TRUE on success
  * =============================================================================
  */
-int
-TMrbtree_insert (TM_ARGDECL  rbtree_t* r, int key, int val);
+TM_CALLABLE
+bool_t
+TMrbtree_insert (TM_ARGDECL  rbtree_t* r, void* key, void* val);
 
 
 /* =============================================================================
  * rbtree_delete
  * =============================================================================
  */
-int
-rbtree_delete (rbtree_t* r, int key);
+bool_t
+rbtree_delete (rbtree_t* r, void* key);
 
 
 /* =============================================================================
  * TMrbtree_delete
  * =============================================================================
  */
-int
-TMrbtree_delete (TM_ARGDECL  rbtree_t* r, int key);
+TM_CALLABLE
+bool_t
+TMrbtree_delete (TM_ARGDECL  rbtree_t* r, void* key);
 
 
 /* =============================================================================
  * rbtree_update
+ * -- Return FALSE if had to insert node first
  * =============================================================================
  */
-int
-rbtree_update (rbtree_t* r, int key, int val);
+bool_t
+rbtree_update (rbtree_t* r, void* key, void* val);
 
 
 /* =============================================================================
  * TMrbtree_update
+ * -- Return FALSE if had to insert node first
  * =============================================================================
  */
-int
-TMrbtree_update (TM_ARGDECL  rbtree_t* r, int key, int val);
+TM_CALLABLE
+bool_t
+TMrbtree_update (TM_ARGDECL  rbtree_t* r, void* key, void* val);
 
 
 /* =============================================================================
  * rbtree_get
  * =============================================================================
  */
-int
-rbtree_get (rbtree_t* r, int key);
+void*
+rbtree_get (rbtree_t* r, void* key);
 
 
 /* =============================================================================
  * TMrbtree_get
  * =============================================================================
  */
-int
-TMrbtree_get (TM_ARGDECL  rbtree_t* r, int key);
+TM_CALLABLE
+void*
+TMrbtree_get (TM_ARGDECL  rbtree_t* r, void* key);
 
 
 /* =============================================================================
  * rbtree_contains
  * =============================================================================
  */
-int
-rbtree_contains (rbtree_t* r, int key);
+bool_t
+rbtree_contains (rbtree_t* r, void* key);
 
 
 /* =============================================================================
  * TMrbtree_contains
  * =============================================================================
  */
-int
-TMrbtree_contains (TM_ARGDECL  rbtree_t* r, int key);
+TM_CALLABLE
+bool_t
+TMrbtree_contains (TM_ARGDECL  rbtree_t* r, void* key);
 
 
 #define TMRBTREE_ALLOC()          TMrbtree_alloc(TM_ARG_ALONE)
 #define TMRBTREE_FREE(r)          TMrbtree_free(TM_ARG  r)
-#define TMRBTREE_INSERT(r, k, v)  TMrbtree_insert(TM_ARG  r, (int)(k), (int)(v))
-#define TMRBTREE_DELETE(r, k)     TMrbtree_delete(TM_ARG  r, (int)(k))
-#define TMRBTREE_UPDATE(r, k, v)  TMrbtree_update(TM_ARG  r, (int)(k), (int)(v))
-#define TMRBTREE_GET(r, k)        TMrbtree_get(TM_ARG  r, (int)(k))
-#define TMRBTREE_CONTAINS(r, k)   TMrbtree_contains(TM_ARG  r, (int)(k))
+#define TMRBTREE_INSERT(r, k, v)  TMrbtree_insert(TM_ARG  r, (void*)(k), (void*)(v))
+#define TMRBTREE_DELETE(r, k)     TMrbtree_delete(TM_ARG  r, (void*)(k))
+#define TMRBTREE_UPDATE(r, k, v)  TMrbtree_update(TM_ARG  r, (void*)(k), (void*)(v))
+#define TMRBTREE_GET(r, k)        TMrbtree_get(TM_ARG  r, (void*)(k))
+#define TMRBTREE_CONTAINS(r, k)   TMrbtree_contains(TM_ARG  r, (void*)(k))
 
 
 #ifdef __cplusplus

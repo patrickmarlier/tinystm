@@ -6,14 +6,17 @@ ROOT ?= .
 
 CC ?= gcc
 AR ?= ar
+DOXYGEN ?= doxygen
+UNIFDEF ?= unifdef
 
+# Debug/optimization flags
 # CFLAGS += -g
 CFLAGS += -O3 -DNDEBUG
 
 TM = stm
 
 CFLAGS += -Wall -Wno-unused-function -Wno-unused-label -fno-strict-aliasing -D_REENTRANT
-CFLAGS += -I$(LIBAO_HOME)/include -I$(TANGER_HOME)/include -I$(ROOT)/include
+CFLAGS += -I$(LIBAO_HOME)/include -I$(ROOT)/include
 
 LDFLAGS += -L$(LIBAO_HOME)/lib -L$(ROOT)/lib -latomic_ops -lstm -lpthread
 
@@ -22,3 +25,10 @@ INCDIR = $(ROOT)/include
 LIBDIR = $(ROOT)/lib
 
 TMLIB = $(LIBDIR)/lib$(TM).a
+
+# GCC thread-local storage (enable if supported on target architecture)
+ifdef NOTLS
+ DEFINES += -UTLS
+else
+ DEFINES += -DTLS
+endif

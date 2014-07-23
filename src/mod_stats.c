@@ -4,9 +4,9 @@
  * Author(s):
  *   Pascal Felber <pascal.felber@unine.ch>
  * Description:
- *   Module for statistics.
+ *   Module for gathering global statistics about transactions.
  *
- * Copyright (c) 2007-2008.
+ * Copyright (c) 2007-2009.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -49,12 +49,10 @@ static tx_stats_t global_stats = { 0, 0, 0, 0 };
  * ################################################################### */
 
 /*
- * Returns STM statistics about a transaction.
+ * Return aggregate statistics about transactions.
  */
-int stm_get_stats(const char *name, void *val)
+int stm_get_global_stats(const char *name, void *val)
 {
-  tx_stats_t *stats;
-
   if (!initialized) {
     fprintf(stderr, "Module mod_stats not initialized\n");
     exit(1);
@@ -73,7 +71,22 @@ int stm_get_stats(const char *name, void *val)
     return 1;
   }
 
-  stats = (tx_stats_t *)stm_get_specific(key);
+  return 0;
+}
+
+/*
+ * Return statistics about current thread.
+ */
+int stm_get_local_stats(TXPARAMS const char *name, void *val)
+{
+  tx_stats_t *stats;
+
+  if (!initialized) {
+    fprintf(stderr, "Module mod_stats not initialized\n");
+    exit(1);
+  }
+
+  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
   assert(stats != NULL);
 
   if (strcmp("nb_commits", name) == 0) {
@@ -95,7 +108,7 @@ int stm_get_stats(const char *name, void *val)
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(void *arg)
+static void on_thread_init(TXPARAMS void *arg)
 {
   tx_stats_t *stats;
 
@@ -108,26 +121,26 @@ static void on_thread_init(void *arg)
   stats->retries = 0;
   stats->max_retries = 0;
 
-  stm_set_specific(key, stats);
+  stm_set_specific(TXARGS key, stats);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(void *arg)
+static void on_thread_exit(TXPARAMS void *arg)
 {
   tx_stats_t *stats;
   unsigned long max;
 
-  stats = (tx_stats_t *)stm_get_specific(key);
+  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
   assert(stats != NULL);
 
-  ATOMIC_FETCH_AND_ADD_MB(&global_stats.commits, stats->commits);
-  ATOMIC_FETCH_AND_ADD_MB(&global_stats.aborts, stats->aborts);
+  ATOMIC_FETCH_ADD_FULL(&global_stats.commits, stats->commits);
+  ATOMIC_FETCH_ADD_FULL(&global_stats.aborts, stats->aborts);
  retry:
-  max = ATOMIC_LOAD_MB(&global_stats.max_retries);
+  max = ATOMIC_LOAD(&global_stats.max_retries);
   if (stats->max_retries > max) {
-    if (ATOMIC_CAS_MB(&global_stats.max_retries, max, stats->max_retries) == 0)
+    if (ATOMIC_CAS_FULL(&global_stats.max_retries, max, stats->max_retries) == 0)
       goto retry;
   }
 
@@ -137,11 +150,11 @@ static void on_thread_exit(void *arg)
 /*
  * Called upon transaction commit.
  */
-static void on_commit(void *arg)
+static void on_commit(TXPARAMS void *arg)
 {
   tx_stats_t *stats;
 
-  stats = (tx_stats_t *)stm_get_specific(key);
+  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
   assert(stats != NULL);
 
   stats->commits++;
@@ -151,11 +164,11 @@ static void on_commit(void *arg)
 /*
  * Called upon transaction abort.
  */
-static void on_abort(void *arg)
+static void on_abort(TXPARAMS void *arg)
 {
   tx_stats_t *stats;
 
-  stats = (tx_stats_t *)stm_get_specific(key);
+  stats = (tx_stats_t *)stm_get_specific(TXARGS key);
   assert(stats != NULL);
 
   stats->aborts++;

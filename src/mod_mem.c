@@ -6,7 +6,7 @@
  * Description:
  *   Module for dynamic memory management.
  *
- * Copyright (c) 2007-2008.
+ * Copyright (c) 2007-2009.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -25,6 +25,7 @@
 
 #include "mod_mem.h"
 
+#include "gc.h"
 #include "stm.h"
 
 /* ################################################################### *
@@ -51,7 +52,7 @@ static int initialized = 0;
 /*
  * Called by the CURRENT thread to allocate memory within a transaction.
  */
-void *stm_malloc(size_t size)
+void *stm_malloc(TXPARAMS size_t size)
 {
   /* Memory will be freed upon abort */
   mem_info_t *mi;
@@ -62,7 +63,7 @@ void *stm_malloc(size_t size)
     exit(1);
   }
 
-  mi = (mem_info_t *)stm_get_specific(key);
+  mi = (mem_info_t *)stm_get_specific(TXARGS key);
   assert(mi != NULL);
 
   /* Round up size */
@@ -89,7 +90,15 @@ void *stm_malloc(size_t size)
 /*
  * Called by the CURRENT thread to free memory within a transaction.
  */
-void stm_free(void *addr, size_t size)
+void stm_free(TXPARAMS void *addr, size_t size)
+{
+  stm_free2(TXARGS addr, 0, size);
+}
+
+/*
+ * Called by the CURRENT thread to free memory within a transaction.
+ */
+void stm_free2(TXPARAMS void *addr, size_t idx, size_t size)
 {
   /* Memory disposal is delayed until commit */
   mem_info_t *mi;
@@ -101,21 +110,23 @@ void stm_free(void *addr, size_t size)
     exit(1);
   }
 
-  mi = (mem_info_t *)stm_get_specific(key);
+  mi = (mem_info_t *)stm_get_specific(TXARGS key);
   assert(mi != NULL);
 
+  /* TODO: if block allocated in same transaction => no need to overwrite */
   if (size > 0) {
-    /* Overwrite to prevent inconsistent reads (we could check if block
-     * was allocated in this transaction => no need to overwrite) */
+    /* Overwrite to prevent inconsistent reads */
     if (sizeof(stm_word_t) == 4) {
+      idx = (idx + 3) >> 2;
       size = (size + 3) >> 2;
     } else {
+      idx = (idx + 7) >> 3;
       size = (size + 7) >> 3;
     }
-    a = (stm_word_t *)addr;
+    a = (stm_word_t *)addr + idx;
     while (size-- > 0) {
       /* Acquire lock and update version number */
-      stm_store2(a++, 0, 0);
+      stm_store2(TXARGS a++, 0, 0);
     }
   }
   /* Schedule for removal */
@@ -131,7 +142,7 @@ void stm_free(void *addr, size_t size)
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(void *arg)
+static void on_thread_init(TXPARAMS void *arg)
 {
   mem_info_t *mi;
 
@@ -141,26 +152,26 @@ static void on_thread_init(void *arg)
   }
   mi->allocated = mi->freed = NULL;
 
-  stm_set_specific(key, mi);
+  stm_set_specific(TXARGS key, mi);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(void *arg)
+static void on_thread_exit(TXPARAMS void *arg)
 {
-  free(stm_get_specific(key));
+  free(stm_get_specific(TXARGS key));
 }
 
 /*
  * Called upon transaction commit.
  */
-static void on_commit(void *arg)
+static void on_commit(TXPARAMS void *arg)
 {
   mem_info_t *mi;
   mem_block_t *mb, *next;
 
-  mi = (mem_info_t *)stm_get_specific(key);
+  mi = (mem_info_t *)stm_get_specific(TXARGS key);
   assert(mi != NULL);
 
   /* Keep memory allocated during transaction */
@@ -176,10 +187,17 @@ static void on_commit(void *arg)
 
   /* Dispose of memory freed during transaction */
   if (mi->freed != NULL) {
+#ifdef EPOCH_GC
+    stm_word_t t = stm_get_clock();
+#endif /* EPOCH_GC */
     mb = mi->freed;
     while (mb != NULL) {
       next = mb->next;
+#ifdef EPOCH_GC
+      gc_free(mb->addr, t);
+#else /* ! EPOCH_GC */
       free(mb->addr);
+#endif /* ! EPOCH_GC */
       free(mb);
       mb = next;
     }
@@ -190,12 +208,12 @@ static void on_commit(void *arg)
 /*
  * Called upon transaction abort.
  */
-static void on_abort(void *arg)
+static void on_abort(TXPARAMS void *arg)
 {
   mem_info_t *mi;
   mem_block_t *mb, *next;
 
-  mi = (mem_info_t *)stm_get_specific(key);
+  mi = (mem_info_t *)stm_get_specific(TXARGS key);
   assert (mi != NULL);
 
   /* Dispose of memory allocated during transaction */

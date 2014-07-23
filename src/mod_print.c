@@ -6,7 +6,7 @@
  * Description:
  *   Module to test callbacks.
  *
- * Copyright (c) 2007-2008.
+ * Copyright (c) 2007-2009.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -26,7 +26,7 @@
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(void *arg)
+static void on_thread_init(TXPARAMS void *arg)
 {
   printf("==> on_thread_init()\n");
   fflush(NULL);
@@ -35,7 +35,7 @@ static void on_thread_init(void *arg)
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(void *arg)
+static void on_thread_exit(TXPARAMS void *arg)
 {
   printf("==> on_thread_exit()\n");
   fflush(NULL);
@@ -44,7 +44,7 @@ static void on_thread_exit(void *arg)
 /*
  * Called upon transaction start.
  */
-static void on_start(void *arg)
+static void on_start(TXPARAMS void *arg)
 {
   printf("==> on_start()\n");
   fflush(NULL);
@@ -53,7 +53,7 @@ static void on_start(void *arg)
 /*
  * Called upon transaction commit.
  */
-static void on_commit(void *arg)
+static void on_commit(TXPARAMS void *arg)
 {
   printf("==> on_commit()\n");
   fflush(NULL);
@@ -62,7 +62,7 @@ static void on_commit(void *arg)
 /*
  * Called upon transaction abort.
  */
-static void on_abort(void *arg)
+static void on_abort(TXPARAMS void *arg)
 {
   printf("==> on_abort()\n");
   fflush(NULL);

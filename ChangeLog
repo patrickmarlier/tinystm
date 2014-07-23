@@ -1,3 +1,39 @@
+[0.9.9 release]
+
+2009-01-29  Pascal Felber  <pascal.felber@unine.ch>
+	* Updated TANGER wrappers.
+	* Prepared new release.
+
+2009-01-17  Pascal Felber  <pascal.felber@unine.ch>
+	* Added content of README as doxygen documentation.
+	* Added new version of TANGER wrappers (partial).
+	* Added region load/store and support for misaligned accesses.
+	* Bug fixes.
+
+2009-01-04  Pascal Felber  <pascal.felber@unine.ch>
+	* Documented APIs (doxygen comments in include files).
+	* Cleaned up some APIs, changed parameters of stm_start().
+	* CTL now spins while address is locked.
+
+2008-12-06  Pascal Felber  <pascal.felber@unine.ch>
+	* Cleaned up atomic operations and memory barriers.
+
+2008-11-26  Pascal Felber  <pascal.felber@unine.ch>
+	* Documented compile-time options in Makefile
+
+2008-11-16  Pascal Felber  <pascal.felber@unine.ch>
+	* Added support to read previous version of locked data.
+	* Added support in Makefile for unifdef.
+
+2008-07-22  Pascal Felber  <pascal.felber@unine.ch>
+	* Added epoch-based memory allocator.
+	* Added conflict tracking and callback.
+	* Added skip list and refactored intset behchmark
+	* Added mod_local module.
+	* Added functions to control extensions and read the clock.
+	* Added support for unit transactions in intset.
+	* Many other changes and fixes.
+
 [0.9.5 release]
 
 2008-07-07  Pascal Felber  <pascal.felber@unine.ch>

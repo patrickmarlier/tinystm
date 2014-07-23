@@ -9,7 +9,7 @@ BINS = types
 all:	$(BINS)
 
 %.o:	%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(DEFINES) -c -o $@ $<
 
 $(BINS):	%:	%.o $(TMLIB)
 	$(CC) -o $@ $< $(LDFLAGS)

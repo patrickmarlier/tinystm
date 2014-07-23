@@ -6,7 +6,7 @@
  * Description:
  *   Module for local memory accesses.
  *
- * Copyright (c) 2008.
+ * Copyright (c) 2007-2009.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -28,7 +28,7 @@
 #include "stm.h"
 
 #ifndef LW_SET_SIZE
-#define LW_SET_SIZE                     1024
+# define LW_SET_SIZE                    1024
 #endif /* ! LW_SET_SIZE */
 
 /* ################################################################### *
@@ -82,7 +82,7 @@ static int initialized = 0;
 /*
  * Called by the CURRENT thread to write to local memory.
  */
-static inline w_entry_t *get_entry()
+static inline w_entry_t *get_entry(TXPARAM)
 {
   w_set_t *ws;
 
@@ -92,7 +92,7 @@ static inline w_entry_t *get_entry()
   }
 
   /* Store in undo log */
-  ws = (w_set_t *)stm_get_specific(key);
+  ws = (w_set_t *)stm_get_specific(TXARGS key);
   assert(ws != NULL);
 
   if (ws->nb_entries == ws->size) {
@@ -111,9 +111,9 @@ static inline w_entry_t *get_entry()
  * FUNCTIONS
  * ################################################################### */
 
-void stm_store_local(stm_word_t *addr, stm_word_t value)
+void stm_store_local(TXPARAMS stm_word_t *addr, stm_word_t value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_WORD;
   w->data.w.a = addr;
@@ -123,9 +123,9 @@ void stm_store_local(stm_word_t *addr, stm_word_t value)
   *addr = value;
 }
 
-void stm_store_local_char(char *addr, char value)
+void stm_store_local_char(TXPARAMS char *addr, char value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_CHAR;
   w->data.c.a = addr;
@@ -135,9 +135,9 @@ void stm_store_local_char(char *addr, char value)
   *addr = value;
 }
 
-void stm_store_local_uchar(unsigned char *addr, unsigned char value)
+void stm_store_local_uchar(TXPARAMS unsigned char *addr, unsigned char value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_UCHAR;
   w->data.uc.a = addr;
@@ -147,9 +147,9 @@ void stm_store_local_uchar(unsigned char *addr, unsigned char value)
   *addr = value;
 }
 
-void stm_store_local_short(short *addr, short value)
+void stm_store_local_short(TXPARAMS short *addr, short value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_SHORT;
   w->data.s.a = addr;
@@ -159,9 +159,9 @@ void stm_store_local_short(short *addr, short value)
   *addr = value;
 }
 
-void stm_store_local_ushort(unsigned short *addr, unsigned short value)
+void stm_store_local_ushort(TXPARAMS unsigned short *addr, unsigned short value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_USHORT;
   w->data.us.a = addr;
@@ -171,9 +171,9 @@ void stm_store_local_ushort(unsigned short *addr, unsigned short value)
   *addr = value;
 }
 
-void stm_store_local_int(int *addr, int value)
+void stm_store_local_int(TXPARAMS int *addr, int value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_INT;
   w->data.i.a = addr;
@@ -183,9 +183,9 @@ void stm_store_local_int(int *addr, int value)
   *addr = value;
 }
 
-void stm_store_local_uint(unsigned int *addr, unsigned int value)
+void stm_store_local_uint(TXPARAMS unsigned int *addr, unsigned int value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_UINT;
   w->data.ui.a = addr;
@@ -195,9 +195,9 @@ void stm_store_local_uint(unsigned int *addr, unsigned int value)
   *addr = value;
 }
 
-void stm_store_local_long(long *addr, long value)
+void stm_store_local_long(TXPARAMS long *addr, long value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_LONG;
   w->data.l.a = addr;
@@ -207,9 +207,9 @@ void stm_store_local_long(long *addr, long value)
   *addr = value;
 }
 
-void stm_store_local_ulong(unsigned long *addr, unsigned long value)
+void stm_store_local_ulong(TXPARAMS unsigned long *addr, unsigned long value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_ULONG;
   w->data.ul.a = addr;
@@ -219,9 +219,9 @@ void stm_store_local_ulong(unsigned long *addr, unsigned long value)
   *addr = value;
 }
 
-void stm_store_local_float(float *addr, float value)
+void stm_store_local_float(TXPARAMS float *addr, float value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_FLOAT;
   w->data.f.a = addr;
@@ -231,9 +231,9 @@ void stm_store_local_float(float *addr, float value)
   *addr = value;
 }
 
-void stm_store_local_double(double *addr, double value)
+void stm_store_local_double(TXPARAMS double *addr, double value)
 {
-  w_entry_t *w = get_entry();
+  w_entry_t *w = get_entry(TXARG);
 
   w->type = TYPE_DOUBLE;
   w->data.d.a = addr;
@@ -243,10 +243,17 @@ void stm_store_local_double(double *addr, double value)
   *addr = value;
 }
 
+void stm_store_local_ptr(TXPARAMS void **addr, void *value)
+{
+  union { stm_word_t w; void *v; } convert;
+  convert.v = value;
+  stm_store_local(TXARGS (stm_word_t *)addr, convert.w);
+}
+
 /*
  * Called upon thread creation.
  */
-static void on_thread_init(void *arg)
+static void on_thread_init(TXPARAMS void *arg)
 {
   w_set_t *ws;
 
@@ -257,17 +264,17 @@ static void on_thread_init(void *arg)
   ws->entries = NULL;
   ws->nb_entries = ws->size = 0;
 
-  stm_set_specific(key, ws);
+  stm_set_specific(TXARGS key, ws);
 }
 
 /*
  * Called upon thread deletion.
  */
-static void on_thread_exit(void *arg)
+static void on_thread_exit(TXPARAMS void *arg)
 {
   w_set_t *ws;
 
-  ws = (w_set_t *)stm_get_specific(key);
+  ws = (w_set_t *)stm_get_specific(TXARGS key);
   assert(ws != NULL);
 
   free(ws->entries);
@@ -277,11 +284,11 @@ static void on_thread_exit(void *arg)
 /*
  * Called upon transaction commit.
  */
-static void on_commit(void *arg)
+static void on_commit(TXPARAMS void *arg)
 {
   w_set_t *ws;
 
-  ws = (w_set_t *)stm_get_specific(key);
+  ws = (w_set_t *)stm_get_specific(TXARGS key);
   assert(ws != NULL);
 
   /* Erase undo log */
@@ -291,12 +298,12 @@ static void on_commit(void *arg)
 /*
  * Called upon transaction abort.
  */
-static void on_abort(void *arg)
+static void on_abort(TXPARAMS void *arg)
 {
   w_set_t *ws;
   int i;
 
-  ws = (w_set_t *)stm_get_specific(key);
+  ws = (w_set_t *)stm_get_specific(TXARGS key);
   assert(ws != NULL);
 
   /* Apply undo log */

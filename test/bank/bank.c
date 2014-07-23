@@ -6,7 +6,7 @@
  * Description:
  *   Bank stress test.
  *
- * Copyright (c) 2007-2008.
+ * Copyright (c) 2007-2009.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -34,7 +34,7 @@
 #include "stm.h"
 
 #ifdef DEBUG
-#define IO_FLUSH                        fflush(NULL)
+# define IO_FLUSH                       fflush(NULL)
 /* Note: stdio is thread-safe */
 #endif
 
@@ -43,8 +43,9 @@
  * transactions, one should check the environment returned by
  * stm_get_env() and only call sigsetjmp() if it is not null.
  */
-#define START                           { sigjmp_buf *_e = stm_get_env(); sigsetjmp(*_e, 0); stm_start(_e, NULL)
-#define START_RO                        { int _ro = 1; sigjmp_buf *_e = stm_get_env(); sigsetjmp(*_e, 0); stm_start(_e, &_ro)
+#define RO                              1
+#define RW                              0
+#define START(id, ro)                   { sigjmp_buf *_e = stm_get_env(); stm_tx_attr_t _a = {id, ro}; sigsetjmp(*_e, 0); stm_start(_e, &_a)
 #define LOAD(addr)                      stm_load((stm_word_t *)addr)
 #define STORE(addr, value)              stm_store((stm_word_t *)addr, (stm_word_t)value)
 #define COMMIT                          stm_commit(); }
@@ -86,7 +87,7 @@ int transfer(account_t *src, account_t *dst, int amount)
   int i;
 
   /* Allow overdrafts */
-  START;
+  START(0, RW);
   i = (int)LOAD(&src->balance);
   i -= amount;
   STORE(&src->balance, i);
@@ -108,7 +109,7 @@ int total(bank_t *bank, int transactional)
       total += bank->accounts[i].balance;
     }
   } else {
-    START_RO;
+    START(1, RO);
     total = 0;
     for (i = 0; i < bank->size; i++) {
       total += (int)LOAD(&bank->accounts[i].balance);
@@ -123,7 +124,7 @@ void reset(bank_t *bank)
 {
   int i;
 
-  START;
+  START(2, RW);
   for (i = 0; i < bank->size; i++) {
     STORE(&bank->accounts[i].balance, 0);
   }
@@ -185,6 +186,10 @@ typedef struct thread_data {
   unsigned long nb_aborts_validate_write;
   unsigned long nb_aborts_validate_commit;
   unsigned long nb_aborts_invalid_memory;
+  unsigned long nb_aborts_reallocate;
+  unsigned long nb_aborts_rollover;
+  unsigned long locked_reads_ok;
+  unsigned long locked_reads_failed;
   unsigned long max_retries;
   unsigned int seed;
   bank_t *bank;
@@ -231,14 +236,18 @@ void *test(void *data)
       }
     }
   }
-  stm_get_parameter("nb_aborts", &d->nb_aborts);
-  stm_get_parameter("nb_aborts_locked_read", &d->nb_aborts_locked_read);
-  stm_get_parameter("nb_aborts_locked_write", &d->nb_aborts_locked_write);
-  stm_get_parameter("nb_aborts_validate_read", &d->nb_aborts_validate_read);
-  stm_get_parameter("nb_aborts_validate_write", &d->nb_aborts_validate_write);
-  stm_get_parameter("nb_aborts_validate_commit", &d->nb_aborts_validate_commit);
-  stm_get_parameter("nb_aborts_invalid_memory", &d->nb_aborts_invalid_memory);
-  stm_get_parameter("max_retries", &d->max_retries);
+  stm_get_stats("nb_aborts", &d->nb_aborts);
+  stm_get_stats("nb_aborts_locked_read", &d->nb_aborts_locked_read);
+  stm_get_stats("nb_aborts_locked_write", &d->nb_aborts_locked_write);
+  stm_get_stats("nb_aborts_validate_read", &d->nb_aborts_validate_read);
+  stm_get_stats("nb_aborts_validate_write", &d->nb_aborts_validate_write);
+  stm_get_stats("nb_aborts_validate_commit", &d->nb_aborts_validate_commit);
+  stm_get_stats("nb_aborts_invalid_memory", &d->nb_aborts_invalid_memory);
+  stm_get_stats("nb_aborts_reallocate", &d->nb_aborts_reallocate);
+  stm_get_stats("nb_aborts_rollover", &d->nb_aborts_rollover);
+  stm_get_stats("locked_reads_ok", &d->locked_reads_ok);
+  stm_get_stats("locked_reads_failed", &d->locked_reads_failed);
+  stm_get_stats("max_retries", &d->max_retries);
   /* Free transaction */
   stm_exit_thread();
 
@@ -247,7 +256,10 @@ void *test(void *data)
 
 void catcher(int sig)
 {
+  static int nb = 0;
   printf("CAUGHT SIGNAL %d\n", sig);
+  if (++nb >= 3)
+    exit(1);
 }
 
 int main(int argc, char **argv)
@@ -271,7 +283,8 @@ int main(int argc, char **argv)
   char *s;
   unsigned long reads, writes, updates, aborts, aborts_locked_read, aborts_locked_write,
     aborts_validate_read, aborts_validate_write, aborts_validate_commit,
-    aborts_invalid_memory, max_retries;
+    aborts_invalid_memory, aborts_reallocate, aborts_rollover,
+    locked_reads_ok, locked_reads_failed, max_retries;
   thread_data_t *data;
   pthread_t *threads;
   pthread_attr_t attr;
@@ -436,6 +449,10 @@ int main(int argc, char **argv)
     data[i].nb_aborts_validate_write = 0;
     data[i].nb_aborts_validate_commit = 0;
     data[i].nb_aborts_invalid_memory = 0;
+    data[i].nb_aborts_reallocate = 0;
+    data[i].nb_aborts_rollover = 0;
+    data[i].locked_reads_ok = 0;
+    data[i].locked_reads_failed = 0;
     data[i].max_retries = 0;
     data[i].seed = rand();
     data[i].bank = bank;
@@ -486,6 +503,10 @@ int main(int argc, char **argv)
   aborts_validate_write = 0;
   aborts_validate_commit = 0;
   aborts_invalid_memory = 0;
+  aborts_reallocate = 0;
+  aborts_rollover = 0;
+  locked_reads_ok = 0;
+  locked_reads_failed = 0;
   reads = 0;
   writes = 0;
   updates = 0;
@@ -502,6 +523,10 @@ int main(int argc, char **argv)
     printf("    #val-w    : %lu\n", data[i].nb_aborts_validate_write);
     printf("    #val-c    : %lu\n", data[i].nb_aborts_validate_commit);
     printf("    #inv-mem  : %lu\n", data[i].nb_aborts_invalid_memory);
+    printf("    #realloc  : %lu\n", data[i].nb_aborts_reallocate);
+    printf("    #r-over   : %lu\n", data[i].nb_aborts_rollover);
+    printf("  #lr-ok      : %lu\n", data[i].locked_reads_ok);
+    printf("  #lr-failed  : %lu\n", data[i].locked_reads_failed);
     printf("  Max retries : %lu\n", data[i].max_retries);
     aborts += data[i].nb_aborts;
     aborts_locked_read += data[i].nb_aborts_locked_read;
@@ -510,6 +535,10 @@ int main(int argc, char **argv)
     aborts_validate_write += data[i].nb_aborts_validate_write;
     aborts_validate_commit += data[i].nb_aborts_validate_commit;
     aborts_invalid_memory += data[i].nb_aborts_invalid_memory;
+    aborts_reallocate += data[i].nb_aborts_reallocate;
+    aborts_rollover += data[i].nb_aborts_rollover;
+    locked_reads_ok += data[i].locked_reads_ok;
+    locked_reads_failed += data[i].locked_reads_failed;
     updates += data[i].nb_transfer;
     reads += data[i].nb_read_all;
     writes += data[i].nb_write_all;
@@ -529,6 +558,10 @@ int main(int argc, char **argv)
   printf("  #val-w      : %lu (%f / s)\n", aborts_validate_write, aborts_validate_write * 1000.0 / duration);
   printf("  #val-c      : %lu (%f / s)\n", aborts_validate_commit, aborts_validate_commit * 1000.0 / duration);
   printf("  #inv-mem    : %lu (%f / s)\n", aborts_invalid_memory, aborts_invalid_memory * 1000.0 / duration);
+  printf("  #realloc    : %lu (%f / s)\n", aborts_reallocate, aborts_reallocate * 1000.0 / duration);
+  printf("  #r-over     : %lu (%f / s)\n", aborts_rollover, aborts_rollover * 1000.0 / duration);
+  printf("#lr-ok        : %lu (%f / s)\n", locked_reads_ok, locked_reads_ok * 1000.0 / duration);
+  printf("#lr-failed    : %lu (%f / s)\n", locked_reads_failed, locked_reads_failed * 1000.0 / duration);
   printf("Max retries   : %lu\n", max_retries);
 
   /* Delete bank and accounts */
