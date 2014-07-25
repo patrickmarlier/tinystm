@@ -35,7 +35,7 @@ LDFLAGS += -lpthread
 # LDFLAGS += -lmtmalloc
 
 # Disable additionnal checks from glibc (__longjmp_chk/__printf_chk)
-# CPPFLAGS += -U_FORTIFY_SOURCE
+CPPFLAGS += -U_FORTIFY_SOURCE
 # CPPFLAGS += -D_FORTIFY_SOURCE=0
 # Enable multi-thread support in glibc
 CPPFLAGS += -D_REENTRANT
