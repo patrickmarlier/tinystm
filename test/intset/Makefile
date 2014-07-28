@@ -20,7 +20,7 @@ intset-hs.o:	intset.c
 intset-ll.o:	intset.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEFINES) -DUSE_LINKEDLIST -c -o $@ $<
 
-intset-rb.o:	intset.c
+intset-rb.o:	intset.c rbtree.c rbtree.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEFINES) -DUSE_RBTREE -c -o $@ $<
 
 intset-sl.o:	intset.c
