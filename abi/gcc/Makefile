@@ -49,6 +49,6 @@ TESTLDFLAGS  += -Wl,-rpath=$(shell pwd)
 TESTLDFLAGS  += -L$(ROOT)/abi/gcc 
 TESTLDFLAGS  += -static -litm
 
-clean: 	intset-clean intsetasf-clean
+clean: 	intset-clean
 	rm -f *.o *.do libitm.a libitm.so
 

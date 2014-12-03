@@ -78,10 +78,6 @@
 # error "SIGNAL_HANDLER can only be used without EPOCH_GC"
 #endif /* defined(EPOCH_GC) && defined(SIGNAL_HANDLER) */
 
-#if defined(HYBRID_ASF) && CM != CM_SUICIDE
-# error "HYBRID_ASF can only be used with SUICIDE contention manager"
-#endif /* defined(HYBRID_ASF) && CM != CM_SUICIDE */
-
 #define TX_GET                          stm_tx_t *tx = tls_get_tx()
 
 #ifndef RW_SET_SIZE
@@ -327,9 +323,6 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #ifdef IRREVOCABLE_ENABLED
   unsigned int irrevocable:4;           /* Is this execution irrevocable? */
 #endif /* IRREVOCABLE_ENABLED */
-#ifdef HYBRID_ASF
-  unsigned int software:1;              /* Is the transaction mode pure software? */
-#endif /* HYBRID_ASF */
   unsigned int nesting;                 /* Nesting level */
 #if CM == CM_MODULAR
   stm_word_t timestamp;                 /* Timestamp (not changed upon restart) */
@@ -349,9 +342,9 @@ typedef struct stm_tx {                 /* Transaction descriptor */
 #if CM == CM_MODULAR
   int visible_reads;                    /* Should we use visible reads? */
 #endif /* CM == CM_MODULAR */
-#if CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF)
+#if CM == CM_MODULAR || defined(TM_STATISTICS)
   unsigned int stat_retries;            /* Number of consecutive aborts (retries) */
-#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF) */
+#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
 #ifdef TM_STATISTICS
   unsigned int stat_commits;            /* Total number of commits (cumulative) */
   unsigned int stat_aborts;             /* Total number of aborts (cumulative) */
@@ -574,7 +567,6 @@ stm_quiesce(stm_tx_t *tx, int block)
 
   PRINT_DEBUG("==> stm_quiesce(%p,%d)\n", tx, block);
 
-  /* TODO ASF doesn't support pthread_mutex_* since it may require syscall. */
   if (IS_ACTIVE(tx->status)) {
     /* Only one active transaction can quiesce at a time, others must abort */
     if (pthread_mutex_trylock(&_tinystm.quiesce_mutex) != 0)
@@ -1242,9 +1234,9 @@ int_stm_init_thread(void)
   tx->visible_reads = 0;
   tx->timestamp = 0;
 #endif /* CM == CM_MODULAR */
-#if CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF)
+#if CM == CM_MODULAR || defined(TM_STATISTICS)
   tx->stat_retries = 0;
-#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) || defined(HYBRID_ASF) */
+#endif /* CM == CM_MODULAR || defined(TM_STATISTICS) */
 #ifdef TM_STATISTICS
   /* Statistics */
   tx->stat_commits = 0;
@@ -1260,9 +1252,6 @@ int_stm_init_thread(void)
   tx->stat_locked_reads_failed = 0;
 # endif /* READ_LOCKED_DATA */
 #endif /* TM_STATISTICS2 */
-#ifdef HYBRID_ASF
-  tx->software = 0;
-#endif /* HYBRID_ASF */
 #ifdef IRREVOCABLE_ENABLED
   tx->irrevocable = 0;
 #endif /* IRREVOCABLE_ENABLED */
@@ -1424,11 +1413,6 @@ int_stm_commit(stm_tx_t *tx)
 #if CM == CM_MODULAR
   tx->visible_reads = 0;
 #endif /* CM == CM_MODULAR */
-
-#ifdef HYBRID_ASF
-  /* Reset to Hybrid mode */
-  tx->software = 0;
-#endif /* HYBRID_ASF */
 
 #ifdef IRREVOCABLE_ENABLED
   if (unlikely(tx->irrevocable)) {

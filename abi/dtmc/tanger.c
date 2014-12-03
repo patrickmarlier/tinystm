@@ -43,13 +43,8 @@
 # define TANGER_LOADSTORE_ATTR __attribute__((nothrow,noinline))
 #endif /* TANGER_LOADSTORE_ATTR */
 
-#ifdef HYBRID_ASF
-# define TM_LOAD    tm_load
-# define TM_STORE   tm_store
-#else /* !HYBRID_ASF */
-# define TM_LOAD    stm_load
-# define TM_STORE   stm_store
-#endif /* !HYBRID_ASF */
+#define TM_LOAD    stm_load
+#define TM_STORE   stm_store
 
 /* TODO manage properly TLS but llvm-gcc should do */
 __thread appstack_t appstack;

@@ -187,14 +187,6 @@ DEFINES += -UDEBUG2
 # DEFINES += -DSIGNAL_HANDLER
 DEFINES += -USIGNAL_HANDLER
 
-########################################################################
-# Enable ASF Hybrid mode
-########################################################################
-
-ifdef HYBRID_ASF
-  $(error This release has no support for ASF Hybrid mode)
-endif
-
 # TODO Enable the construction of 32bit lib on 64bit environment 
 
 ########################################################################
