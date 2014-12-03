@@ -102,10 +102,8 @@ stm_wbetl_extend(stm_tx_t *tx)
 
   /* Get current time */
   now = GET_CLOCK;
-  if (now >= VERSION_MAX) {
-    /* Clock overflow */
-    return 0;
-  }
+  /* No need to check clock overflow here. The clock can exceed up to MAX_THREADS and it will be reset when the quiescence is reached. */
+
   /* Try to validate read set */
   if (stm_wbetl_validate(tx)) {
     /* It works: we can extend until now */
